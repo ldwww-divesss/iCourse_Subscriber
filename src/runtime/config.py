@@ -161,7 +161,10 @@ IMAGE_WORKERS = int(os.environ.get("IMAGE_WORKERS", "20"))
 OCR_MAX_WORKERS = int(os.environ.get("OCR_MAX_WORKERS", "8"))
 OCR_INITIAL_TARGET = int(os.environ.get("OCR_INITIAL_TARGET", "3"))
 OCR_MIN_TARGET = int(os.environ.get("OCR_MIN_TARGET", "1"))
-OCR_MAX_TARGET = int(os.environ.get("OCR_MAX_TARGET", "8"))
+# RapidOCR is single-threaded CPU-bound — one page fully saturates one
+# core.  Raising this beyond 2 yields no throughput gain but creates
+# noisy ResourceMonitor target-churn logs every second.
+OCR_MAX_TARGET = int(os.environ.get("OCR_MAX_TARGET", "2"))
 # When the LectureRunner is mid-ASR, the OCR pool's effective max target
 # drops to this value so the ASR thread block (now num_threads=4) doesn't
 # contend with a saturated OCR pool.  Workload split: ASR gets ~2 effective
