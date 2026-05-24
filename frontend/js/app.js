@@ -266,7 +266,7 @@ document.addEventListener("alpine:init", () => {
           );
         }
 
-        this.courses = ICS.db.getCourses();
+        this.courses = this._sortCoursesByStar(ICS.db.getCourses());
         this.view = "courses";
       } catch (e) {
         this.error = e.message;
@@ -339,11 +339,18 @@ document.addEventListener("alpine:init", () => {
     },
     gotoPrevLecture() {
       var lec = this.prevLecture();
-      if (lec) this._go("detail", { subId: lec.sub_id });
+      if (lec) { this._go("detail", { subId: lec.sub_id }); this._scrollToTop(); }
     },
     gotoNextLecture() {
       var lec = this.nextLecture();
-      if (lec) this._go("detail", { subId: lec.sub_id });
+      if (lec) { this._go("detail", { subId: lec.sub_id }); this._scrollToTop(); }
+    },
+    _scrollToTop() {
+      var self = this;
+      this.$nextTick(function () {
+        var el = document.querySelector("main");
+        if (el) el.scrollTop = 0;
+      });
     },
 
     /* Star/pin a course.  Per-browser localStorage state; no roundtrip

@@ -92,6 +92,8 @@
 
 ## 前端页面（索引与查看）
 
+![alt text](docs\frontend.png)
+
 本项目自带一个浏览器端加密数据库查看器，部署在 GitHub Pages：
 
 访问 `https://你的用户名.github.io/Fudan_iCourse_Subscriber/`
@@ -99,8 +101,6 @@
 功能介绍：
 - **浏览器端解密**：输入你的凭据，浏览器用 WebCrypto 解密 sql.js 读取 shard 数据库，凭据不离开本地
 - **按课程/课次浏览**：查看每节课的转录和摘要内容
-- **订阅编辑器**：从学期课程目录中搜索、勾选课程，一键保存到 GitHub Secret 并触发工作流
-- **CDN 视频签名播放**：浏览器内计算 CDN 签名参数，直接在浏览器中播放课程视频
 - **导出 PDF**：通过 GitHub Actions 触发导出工作流，生成格式化课程笔记 PDF 并邮件发送
 
 > 前端页面需要你手动在 GitHub Pages 设置中开启（Settings → Pages → Source → GitHub Actions），然后触发一次 Deploy Frontend workflow 即可部署。
