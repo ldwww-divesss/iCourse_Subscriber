@@ -35,7 +35,7 @@ import tempfile
 from src.data import crypto_box
 from src.data.schema import SCHEMA_SQL as _SCHEMA_SQL
 
-SHARD_TARGET_BYTES = 10 * 1024 * 1024  # encrypted+gzipped target per shard
+SHARD_TARGET_BYTES = 3 * 1024 * 1024   # encrypted+gzipped target per shard
 COMPRESSION_RATIO_GUESS = 4  # gzip ratio for transcript+summary text (Chinese)
 INDEX_FILENAME = "icourse-index.enc"
 SHARDS_DIR = "shards"
