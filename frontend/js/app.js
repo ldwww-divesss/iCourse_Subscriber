@@ -606,9 +606,8 @@ document.addEventListener("alpine:init", () => {
 
     // ── Subscriptions editor (three-column) ──────────────────────────
     openSubscriptions() {
+      // Minimal synchronous work — enter the page immediately.
       this.allCoursesTerms = ICS.db.getAllCoursesTerms();
-      // Default: no term filter ("全部学期"), load the most recent
-      // 2 terms to keep the UI responsive (20k+ courses freeze Alpine).
       this.subsTerms = [];
       this.subsDepts = [];
       this.deptSearchQuery = "";
@@ -616,14 +615,14 @@ document.addEventListener("alpine:init", () => {
       this.subsSearchTeacher = "";
       this.subsTermOpen = false;
       this.subsDeptOpen = false;
-      this._loadCoursesForTerms();
+      this.allCourses = [];
+      this.subsFiltered = [];
       this.singleRunIds = [];
       this.subsSelLeft = [];
       this.subsSelMiddle = [];
       this.subsSelRight = [];
       this.subsError = "";
-      // Load subscription: prefer localStorage (fast), fallback to
-      // the meta table (written by CI from the actual GitHub Secret).
+      // Load subscription (localStorage → meta table fallback)
       this.subscribedIds = [];
       try {
         var cached = JSON.parse(
@@ -637,7 +636,6 @@ document.addEventListener("alpine:init", () => {
           this.subscribedIds = metaRaw.split(",")
             .map(function (s) { return s.trim(); })
             .filter(Boolean);
-          // Hydrate localStorage so future loads skip the DB lookup
           try {
             localStorage.setItem(
               _LS + "lastSubscribed",
@@ -646,8 +644,10 @@ document.addEventListener("alpine:init", () => {
           } catch {}
         }
       }
-      this.rebuildSubsFiltered();
       this.navigate("subscriptions");
+      // Background-load the catalog after the page has rendered
+      var self = this;
+      setTimeout(function () { self._loadCoursesForTerms(); }, 200);
     },
     // ── Async batch-load courses to avoid freezing the UI ───────────
     _loadCoursesForTerms() {
@@ -655,39 +655,35 @@ document.addEventListener("alpine:init", () => {
       var terms = this.subsTerms.length
         ? this.subsTerms
         : this.allCoursesTerms;
-      this.allCourses = [];
-      this.rebuildSubsFiltered();
 
       var tIdx = 0;
-      var rowIdx = 0;
-      var currentRows = [];
-      var CHUNK = 500;
+      var CHUNK = 200;
+      var skipCount = 0;
 
-      function loadChunk() {
-        if (tIdx >= terms.length) {
-          // Done — flush remaining
-          if (currentRows.length) {
-            self.allCourses = self.allCourses.concat(currentRows);
-            self.rebuildSubsFiltered();
-          }
-          return;
-        }
-        if (!currentRows.length) {
-          currentRows = ICS.db.getAllCourses(terms[tIdx]);
-          rowIdx = 0;
-        }
-        var chunk = currentRows.slice(rowIdx, rowIdx + CHUNK);
-        rowIdx += chunk.length;
-        if (rowIdx >= currentRows.length) {
-          tIdx++;
-          currentRows = [];
-        }
-        self.allCourses = self.allCourses.concat(chunk);
-        self.rebuildSubsFiltered();
-        setTimeout(loadChunk, 0);
+      function nextTerm() {
+        if (tIdx >= terms.length) return;
+        var rows = ICS.db.getAllCourses(terms[tIdx]);
+        tIdx++;
+        feed(0, rows);
       }
 
-      loadChunk();
+      function feed(offset, rows) {
+        var sub = rows.slice(offset, offset + CHUNK);
+        self.allCourses = self.allCourses.concat(sub);
+        // Only re-filter every 3 chunks (~600 rows) to reduce DOM churn
+        skipCount++;
+        if (skipCount % 3 === 0) {
+          self.rebuildSubsFiltered();
+        }
+        if (offset + CHUNK >= rows.length) {
+          self.rebuildSubsFiltered();  // Final flush
+          setTimeout(nextTerm, 80);
+        } else {
+          setTimeout(function () { feed(offset + CHUNK, rows); }, 80);
+        }
+      }
+
+      setTimeout(nextTerm, 300);  // Wait 300ms after page render
     },
     // ── Term badge color (cyclic palette for the search results) ─────
     _TERM_COLORS: [
