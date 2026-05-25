@@ -31,8 +31,16 @@ from src.ai.transcriber import Transcriber
 from src.api.webvpn import WebVPNSession
 
 
-def login_with_retry(max_attempts: int = 3) -> WebVPNSession:
-    """Login to WebVPN + iCourse CAS, retrying on transient failures."""
+def login_with_retry(max_attempts: int = 5) -> WebVPNSession:
+    """Login to WebVPN + iCourse CAS, retrying on transient failures.
+
+    The iCourse CAS step (authenticate_icourse) has its own inner retry
+    loop for transient redirect-chain hiccups; this outer loop only runs
+    when those inner retries are exhausted, which generally means the
+    WebVPN session itself needs a fresh login.  5 attempts handles the
+    long tail of times when CAS rejects multiple fresh sessions in a
+    row before letting one through.
+    """
     for attempt in range(max_attempts):
         try:
             vpn = WebVPNSession()
@@ -43,8 +51,8 @@ def login_with_retry(max_attempts: int = 3) -> WebVPNSession:
             return vpn
         except Exception as e:
             if attempt < max_attempts - 1:
-                print(f"  Failed: {type(e).__name__}, retrying...")
-                time.sleep(3)
+                print(f"  Failed: {type(e).__name__}: {e}; retrying...")
+                time.sleep(5)
             else:
                 raise
 

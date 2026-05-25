@@ -199,27 +199,26 @@ class WebVPNSession:
         vpn_url = get_vpn_url(casapi_url)
 
         # Follow redirect chain to reach IDP login page and extract lck.
-        # The CAS gateway intermittently returns a 200 interstitial or
-        # bounces back to WebVPN's own /login (cookie not yet effective
-        # for the casapi vhost) right after a successful WebVPN login.
-        # Retry a few times in-place before letting login_with_retry()
-        # waste a full WebVPN re-login on a transient hiccup.
+        # The CAS gateway intermittently returns a 200 interstitial or a
+        # 302 to a `/login`-shaped page right after a successful WebVPN
+        # login.  Both are transient — chase the full redirect chain (lck
+        # often appears mid-chain even when an intermediate hop looks
+        # like a stale-session bounce) and retry a few times before
+        # letting login_with_retry() waste a full WebVPN re-login.
         import time as _time
         lck = None
+        last_locations: list[str] = []
         for cas_attempt in range(3):
             if cas_attempt > 0:
+                _time.sleep(2)
                 print(f"    CAS lck extract retry {cas_attempt}/2...")
-                _time.sleep(3)
             resp = self.session.get(vpn_url, allow_redirects=False, timeout=60)
+            last_locations = []
             for _ in range(15):
                 location = resp.headers.get("Location", "")
                 if resp.status_code not in (301, 302, 303, 307) or not location:
                     break
-                # WebVPN bouncing to its own /login means the session
-                # isn't recognised for this vhost — stop chasing the
-                # heavy login page and let the outer retry try again.
-                if "/login" in location:
-                    break
+                last_locations.append(location)
                 lck_match = re.search(r'lck=([^&#"]+)', location)
                 if lck_match:
                     lck = lck_match.group(1)
@@ -241,8 +240,12 @@ class WebVPNSession:
             if lck:
                 break
         if not lck:
+            # Log the redirect trail so future failures are diagnosable
+            # without re-running with extra prints.
+            trail = " -> ".join(last_locations[-3:]) if last_locations else "<no redirects>"
             raise RuntimeError(
-                f"Failed to extract lck from CAS redirect chain (status={resp.status_code})"
+                f"Failed to extract lck from CAS redirect chain "
+                f"(status={resp.status_code}, last hops: {trail})"
             )
 
         entity_id = config.ICOURSE_BASE
