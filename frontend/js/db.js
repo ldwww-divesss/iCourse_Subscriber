@@ -195,14 +195,6 @@ function _getSubscribedCourseIds() {
   return _queryAll("SELECT course_id FROM courses").map((r) => r.course_id);
 }
 
-function _hasCourseInTerm(courseId, term) {
-  var rows = _queryAll(
-    "SELECT 1 FROM all_courses WHERE course_id = ? AND term = ?",
-    [courseId, term],
-  );
-  return rows.length > 0;
-}
-
 window.ICS.db = {
   initDB: _initFromBytes,
   initEmpty: _initEmpty,
@@ -215,5 +207,4 @@ window.ICS.db = {
   getAllCourses: _getAllCourses,
   getAllCoursesTerms: _getAllCoursesTerms,
   getSubscribedCourseIds: _getSubscribedCourseIds,
-  hasCourseInTerm: _hasCourseInTerm,
 };

@@ -621,28 +621,16 @@ document.addEventListener("alpine:init", () => {
     },
     // ── Load courses for selected terms (not all 20k) ──────────────
     _loadCoursesForTerms() {
-      // Start with user-selected terms.  If none selected, default to
-      // the 2 most recent terms (performance: 20k+ courses in Alpine
-      // causes multi-second freezes on every interaction).
-      var needed = new Set(this.subsTerms.length
+      // Only load the user-selected term(s).  If none selected, load
+      // the 2 most recent terms to keep the DOM responsive (~5-10k
+      // courses is manageable; 20k+ causes multi-second freezes).
+      var terms = this.subsTerms.length
         ? this.subsTerms
-        : this.allCoursesTerms.slice(0, 2));
-      // Always include terms containing subscribed course IDs so the
-      // left column isn't empty regardless of the current filter.
-      for (var i = 0; i < this.subscribedIds.length; i++) {
-        var sid = this.subscribedIds[i];
-        for (var j = 0; j < this.allCoursesTerms.length; j++) {
-          var t = this.allCoursesTerms[j];
-          if (ICS.db.hasCourseInTerm(sid, t)) needed.add(t);
-        }
-      }
+        : this.allCoursesTerms.slice(0, 2);
       var all = [];
-      for (var k = 0; k < this.allCoursesTerms.length; k++) {
-        var tt = this.allCoursesTerms[k];
-        if (needed.has(tt)) {
-          var rows = ICS.db.getAllCourses(tt);
-          for (var m = 0; m < rows.length; m++) all.push(rows[m]);
-        }
+      for (var i = 0; i < terms.length; i++) {
+        var rows = ICS.db.getAllCourses(terms[i]);
+        for (var j = 0; j < rows.length; j++) all.push(rows[j]);
       }
       this.allCourses = all;
       this.rebuildSubsFiltered();
