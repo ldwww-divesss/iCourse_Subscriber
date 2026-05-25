@@ -292,7 +292,7 @@ def run():
 
     # Refresh the semester catalog: run on the 5th and 25th of each month,
     # or immediately if the database has no catalog data yet.
-    has_catalog = bool(db.list_all_courses())
+    has_catalog = db.has_all_courses()
     today = datetime.datetime.now().day
     if not has_catalog or today in (5, 25):
         _crawl_semester_catalog(client, db, reporter)

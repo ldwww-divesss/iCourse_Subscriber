@@ -32,14 +32,24 @@ async function _gunzip(compressedBytes) {
    skip the network + decrypt + decompress chain on subsequent loads.
 */
 var _idbName = "ics_cache_v2";
+// Cache the open Promise — every shard load fires _idbGet + _idbPut, and
+// without this each call opens its own connection.  Reopening costs ~10ms
+// on cold caches and accumulates fast over 100+ shard reads.
+var _idbPromise = null;
 
 function _idbOpen() {
-  return new Promise(function(resolve, reject) {
+  if (_idbPromise) return _idbPromise;
+  _idbPromise = new Promise(function(resolve, reject) {
     var req = indexedDB.open(_idbName, 1);
     req.onupgradeneeded = function() { req.result.createObjectStore("blobs"); };
     req.onsuccess = function() { resolve(req.result); };
-    req.onerror = function() { reject(req.error); };
+    req.onerror = function() {
+      // Don't cache failed opens — next call retries cleanly.
+      _idbPromise = null;
+      reject(req.error);
+    };
   });
+  return _idbPromise;
 }
 
 async function _idbGet(key) {
@@ -247,7 +257,7 @@ document.addEventListener("alpine:init", () => {
     setupError: "", setupTesting: false,
     settingsForm: {}, showSecrets: {},
     exportDialogOpen: false, exportSelection: {}, exportingPdf: false,
-    iterations: 100000, repoOwner: "", repoName: "", dataBranch: "data",
+    repoOwner: "", repoName: "", dataBranch: "data",
     _history: [],
     /* Subscriptions editor state — three-column layout:
        left (subscribed) | middle (catalog search) | right (single-run).
@@ -276,7 +286,6 @@ document.addEventListener("alpine:init", () => {
       this.repoOwner = s.owner || (detected?.owner ?? "");
       this.repoName = s.repo || (detected?.repo ?? "");
       this.dataBranch = s.branch || "data";
-      this.iterations = s.iterations || 100000;
       const creds = _loadCreds();
       if (!creds) { this.view = "setup"; return; }
       await this._loadDB(creds);
@@ -588,7 +597,7 @@ document.addEventListener("alpine:init", () => {
           );
         }
         _saveCreds({ ...this.setup });
-        _saveSettings({ owner: this.repoOwner, repo: this.repoName, branch: this.dataBranch, iterations: this.iterations });
+        _saveSettings({ owner: this.repoOwner, repo: this.repoName, branch: this.dataBranch });
         this.commitSha = manifest.commitSha;
         await this._loadDB({ ...this.setup });
       } catch (e) { this.setupError = e.message; }
@@ -602,7 +611,7 @@ document.addEventListener("alpine:init", () => {
     },
     async saveSettingsAndReload() {
       _saveCreds({ ...this.settingsForm });
-      _saveSettings({ owner: this.repoOwner, repo: this.repoName, branch: this.dataBranch, iterations: this.iterations });
+      _saveSettings({ owner: this.repoOwner, repo: this.repoName, branch: this.dataBranch });
       this._toast("Saved. Reloading...", "success");
       const c = _loadCreds();
       if (c) await this._loadDB(c);
@@ -611,6 +620,12 @@ document.addEventListener("alpine:init", () => {
       if (!confirm("Clear all saved credentials?")) return;
       localStorage.removeItem(_LS + "creds");
       localStorage.removeItem(_LS + "settings");
+      // Close the cached connection before deleting — Chrome/Firefox block
+      // deleteDatabase indefinitely while any handle is still open.
+      if (_idbPromise) {
+        _idbPromise.then(function(db) { try { db.close(); } catch (e) {} });
+        _idbPromise = null;
+      }
       indexedDB.deleteDatabase(_idbName);
       this.view = "setup";
       this.setup = { token: "", stuid: "", uispsw: "" };

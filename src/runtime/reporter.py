@@ -172,7 +172,14 @@ class Reporter:
             }
 
     def image_progress_tick(self, sub_id: str):
-        """Call once per finished image. Emits a line every 30 (and at end)."""
+        """Call once per finished image. Emits a line every 30 (and at end).
+
+        Hot path — OCR/image workers hit this from many threads.  Keep the
+        critical section tiny: only mutate the per-sub_id counter inside
+        the lock, then drop the lock before doing psutil sampling +
+        ``print`` (both can stall hundreds of ms under high CPU/IO load).
+        """
+        emit_payload = None
         with self._lock:
             st = self._image_progress_state.get(sub_id)
             if st is None:
@@ -182,17 +189,19 @@ class Reporter:
             total = st["total"]
             is_final = (done == total)
             cross = (done - st["last_emit_at_count"]) >= self.IMAGE_PROGRESS_EVERY_PICS
-            if not (cross or is_final):
-                return
-            st["last_emit_at_count"] = done
-            elapsed = max(time.time() - st["t0"], 0.001)
-            rate = done / elapsed
-            bar = self._bar(done, total)
-            _rm = _resource_meter("io")
-            print(f"    [Images {sub_id}] {bar} {done}/{total} "
-                  f"({rate:.1f} pic/s){_rm}", flush=True)
+            if cross or is_final:
+                st["last_emit_at_count"] = done
+                elapsed = max(time.time() - st["t0"], 0.001)
+                emit_payload = (done, total, done / elapsed, is_final)
             if is_final:
                 self._image_progress_state.pop(sub_id, None)
+        if emit_payload is None:
+            return
+        done, total, rate, _is_final = emit_payload
+        bar = self._bar(done, total)
+        _rm = _resource_meter("io")
+        print(f"    [Images {sub_id}] {bar} {done}/{total} "
+              f"({rate:.1f} pic/s){_rm}", flush=True)
 
     def image_progress_abort(self, sub_id: str):
         with self._lock:
@@ -226,7 +235,12 @@ class Reporter:
         Cheap and lock-free for the not-tracked case so OCR workers that
         run from contexts without a registered start (e.g. resummarize
         path that doesn't pre-count) don't pay any cost.
+
+        Like ``image_progress_tick``, the psutil snapshot and ``print``
+        run outside the lock so the hot path serialises only on a tiny
+        counter update.
         """
+        emit_payload = None
         with self._lock:
             st = self._ocr_progress_state.get(sub_id)
             if st is None:
@@ -236,17 +250,19 @@ class Reporter:
             total = st["total"]
             is_final = (done >= total)
             cross = (done - st["last_emit_at_count"]) >= self.OCR_PROGRESS_EVERY_PAGES
-            if not (cross or is_final):
-                return
-            st["last_emit_at_count"] = done
-            elapsed = max(time.time() - st["t0"], 0.001)
-            rate = done / elapsed
-            bar = self._bar(done, total)
-            _rm = _resource_meter("cpu")
-            print(f"    [OCR {sub_id}] {bar} {done}/{total} "
-                  f"({rate:.2f} page/s){_rm}", flush=True)
+            if cross or is_final:
+                st["last_emit_at_count"] = done
+                elapsed = max(time.time() - st["t0"], 0.001)
+                emit_payload = (done, total, done / elapsed, is_final)
             if is_final:
                 self._ocr_progress_state.pop(sub_id, None)
+        if emit_payload is None:
+            return
+        done, total, rate, _is_final = emit_payload
+        bar = self._bar(done, total)
+        _rm = _resource_meter("cpu")
+        print(f"    [OCR {sub_id}] {bar} {done}/{total} "
+              f"({rate:.2f} page/s){_rm}", flush=True)
 
     def ocr_progress_abort(self, sub_id: str):
         with self._lock:

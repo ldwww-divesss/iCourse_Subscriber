@@ -188,7 +188,10 @@ class PPTPipeline:
         pending = self._db.get_pending_ppt_pages(sub_id)
         # If prefetch_and_ocr submitted OCR in the previous lecture's LLM
         # phase, drain those futures before proceeding (OCR may still be
-        # running if the LLM returned early).
+        # running if the LLM returned early).  After draining, re-query
+        # pending so any pages the API exposed *after* prefetch ran (rare,
+        # but possible if the lecturer adds slides mid-recording) are still
+        # processed instead of silently dropped.
         pre_futs = self._prefetched_ocr.pop(sub_id, None)
         if pre_futs:
             for fut in as_completed(pre_futs):
@@ -196,7 +199,7 @@ class PPTPipeline:
                     fut.result()
                 except Exception:
                     pass
-            pending = []  # pages were already processed
+            pending = self._db.get_pending_ppt_pages(sub_id)
         presubmit_failed = 0
         for p in pending:
             page_num = p["page_num"]

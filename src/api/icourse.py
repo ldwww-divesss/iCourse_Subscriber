@@ -27,8 +27,10 @@ def fetch_ppt_image(client: "ICourseClient", item: dict,
     url = item["pptimgurl"]
     for attempt in range(1, max_attempts + 1):
         try:
-            vpn_url = get_vpn_url(url) if not url.startswith(client.base_url) else url
-            resp = client.vpn.get(vpn_url, timeout=timeout)
+            if url.startswith(config.WEBVPN_BASE):
+                resp = client.vpn.get_raw(url, timeout=timeout)
+            else:
+                resp = client.vpn.get(url, timeout=timeout)
             resp.raise_for_status()
             return resp.content
         except Exception as e:
@@ -255,8 +257,7 @@ class ICourseClient:
                 if not total:
                     continue
                 courses = resp.get("courses", [])
-                name = (courses[0].get("term_name") or str(code)
-                        if courses else str(code))
+                name = (courses[0].get("term_name") if courses else None) or str(code)
                 results.append({"code": str(code), "name": name,
                                 "count": total})
             except Exception:

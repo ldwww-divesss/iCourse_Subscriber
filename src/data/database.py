@@ -29,6 +29,13 @@ class Database:
         self.db_path = db_path or config.DB_PATH
         os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        # WAL gets readers (the frontend's read-only export step, or the
+        # status badge in long runs) off the writer's lock chain, so the
+        # nightly run's many small writes don't block ad-hoc reads.  Pair
+        # with NORMAL sync for ~3-4x write throughput vs FULL — safe enough
+        # given the workflow re-encrypts + uploads after the run completes.
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
         self._init_tables()
@@ -150,6 +157,17 @@ class Database:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def has_all_courses(self) -> bool:
+        """True if the catalog has any rows — cheap existence probe.
+
+        Used by the nightly run to decide whether to skip the catalog
+        crawl on non-5th/25th days.  ``SELECT 1 ... LIMIT 1`` runs in
+        microseconds even with 20k rows; the previous ``bool(list_all_courses())``
+        materialised the whole catalog into Python just to call ``bool`` on it.
+        """
+        return self.conn.execute(
+            "SELECT 1 FROM all_courses LIMIT 1"
+        ).fetchone() is not None
 
     def insert_lecture(
         self, sub_id: str, course_id: str, sub_title: str, date: str
