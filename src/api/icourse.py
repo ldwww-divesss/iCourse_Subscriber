@@ -394,9 +394,14 @@ class ICourseClient:
     def get_sub_info(self, course_id: str, sub_id: str) -> dict:
         """Get lecture info including video URLs and timestamp.
 
-        Returns the full sub-info data from the API.
-        The playurl dict maps stream indices to video URLs.
-        The 'now' field provides the server timestamp for CDN signing.
+        Returns the data payload from the API.
+
+        Non-zero API codes that still ship a populated data payload
+        (notably 7001 "视频未到开放时间", the school's 24h pre-release
+        review gate) are returned as partial data so the caller can
+        extract the video URL from nested content.playback.url — the
+        gate scrubs top-level video_list/playurl but not the nested
+        URL.  Only raises on HTTP failure or an entirely empty payload.
         """
         url = (
             f"{self.base_url}"
@@ -407,27 +412,38 @@ class ICourseClient:
         })
         resp.raise_for_status()
         data = resp.json()
+        payload = data.get("data") or {}
 
-        if data.get("code") != 0:
+        if data.get("code") != 0 and not payload:
             raise RuntimeError(
                 f"API error for sub-info {sub_id}: {data.get('msg')}"
             )
 
-        return data.get("data", {})
+        return payload
 
     def get_video_url(self, course_id: str, sub_id: str) -> str | None:
         """Get a signed MP4 video URL for a specific lecture.
 
-        Uses the get-sub-info API to get the base video URL, then
-        signs it with CDN authentication parameters (clientUUID, t).
+        Cascades through URL sources, most- to least-preferred:
+          1. info.video_list[*].preview_url     — healthy lecture
+          2. info.playurl[*]                    — healthy alternate
+          3. info.content.playback.url          — review-gated (no extra call)
+          4. get-sub-detail content.playback.url — last resort
 
-        Returns the signed video URL string if found, None otherwise.
+        Sources 3 and 4 cover the school's pre-release review gate
+        (sub-info code 7001 "视频未到开放时间"), which scrubs top-level
+        video_list/playurl but leaves the URL in nested fields.  The
+        CDN itself does not enforce the gate, so a signed URL from
+        either source downloads successfully.
+
+        Returns the signed video URL string, or None if no source yields one.
         """
         try:
             info = self.get_sub_info(course_id, sub_id)
         except Exception as e:
-            print(f"    Failed to get sub info for {sub_id}: {type(e).__name__}")
-            return None
+            print(f"    sub-info unavailable for {sub_id} "
+                  f"({type(e).__name__}); falling back to sub-detail")
+            info = {}
 
         # Get server timestamp for signing
         now = info.get("now")
@@ -458,7 +474,19 @@ class ICourseClient:
                         base_url = v
                         break
 
-        # Last resort: try unsigned get-sub-detail
+        # Review-gate fallback: nested content.playback.url is preserved
+        # even when code == 7001 scrubs the top-level fields above.
+        if not base_url:
+            playback = (info.get("content") or {}).get("playback") or {}
+            nested = playback.get("url")
+            if isinstance(nested, str) and nested.endswith(".mp4"):
+                base_url = nested
+                if not now:
+                    content_now = (info.get("content") or {}).get("now")
+                    if isinstance(content_now, (int, str)):
+                        now = int(content_now)
+
+        # Last resort: hit get-sub-detail (gate-free) directly.
         if not base_url:
             try:
                 detail = self.get_sub_detail(course_id, sub_id)
@@ -470,7 +498,8 @@ class ICourseClient:
                 pass
 
         if not base_url:
-            print(f"    No video URL found for {sub_id} (tried video_list, playurl, sub_detail)")
+            print(f"    No video URL found for {sub_id} (tried video_list, "
+                  f"playurl, content.playback, sub_detail)")
             return None
 
         return self.sign_video_url(base_url, now=now)
