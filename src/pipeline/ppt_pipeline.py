@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING
 
 from src.api import icourse
 from src.ai.ocr import ocr_image_text
-from src.ai.ppt_dedup import compute_dhash, dedup_dhash, is_invalid_page
+from src.ai.ppt_dedup import clean_ppt_text, compute_dhash, dedup_dhash, is_invalid_page
 
 if TYPE_CHECKING:
     from src.data.database import Database
@@ -354,8 +354,11 @@ class PPTPipeline:
             if self._reporter:
                 self._reporter.ocr_progress_tick(sub_id)
             return page_num, "failed"
-        status = "invalid" if is_invalid_page(text) else "done"
-        self._db.update_ppt_page(sub_id, page_num, text, status)
+        # Strip UI chrome lines before storing so (a) the database holds
+        # cleaned text and (b) is_invalid_page judges content, not chrome.
+        cleaned = clean_ppt_text(text)
+        status = "invalid" if is_invalid_page(cleaned) else "done"
+        self._db.update_ppt_page(sub_id, page_num, cleaned, status)
         if self._reporter:
             self._reporter.ocr_progress_tick(sub_id)
         return page_num, status
