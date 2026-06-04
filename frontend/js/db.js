@@ -164,13 +164,26 @@ function _getPptPages(subId) {
   `, [subId]);
 }
 
-function _searchSummaries(query) {
+function _searchSummaries(query, courseIds) {
   if (!query?.trim()) return [];
   // Match against summary, transcript, and sub_title.  Transcript is the
   // most useful for "I remember the teacher said X" lookups; summary
   // covers "I read it in the notes"; sub_title covers session names.
   // We mark which field hit so the UI can show the right snippet.
   const q = query;
+  var textMatchClause = `
+    l.summary    LIKE '%' || ? || '%'
+       OR l.sub_title  LIKE '%' || ? || '%'
+       OR l.transcript LIKE '%' || ? || '%'
+       OR EXISTS(SELECT 1 FROM ppt_pages pp3 WHERE pp3.sub_id = l.sub_id AND pp3.text LIKE '%' || ? || '%')
+  `;
+  var whereClauses = ["(" + textMatchClause + ")"];
+  var params = [q, q, q, q, q, q, q, q, q];
+  if (courseIds && courseIds.length) {
+    var placeholders = courseIds.map(function () { return "?"; }).join(",");
+    whereClauses.push("l.course_id IN (" + placeholders + ")");
+    for (var i = 0; i < courseIds.length; i++) params.push(String(courseIds[i]));
+  }
   return _queryAll(`
     SELECT l.sub_id, l.sub_title, l.summary, l.transcript,
            (SELECT pp.text FROM ppt_pages pp WHERE pp.sub_id = l.sub_id AND pp.text LIKE '%' || ? || '%' LIMIT 1) AS ppt_text,
@@ -183,12 +196,9 @@ function _searchSummaries(query) {
              ELSE 'other'
            END AS hit_field
     FROM lectures l JOIN courses c ON l.course_id = c.course_id
-    WHERE l.summary    LIKE '%' || ? || '%'
-       OR l.sub_title  LIKE '%' || ? || '%'
-       OR l.transcript LIKE '%' || ? || '%'
-       OR EXISTS(SELECT 1 FROM ppt_pages pp3 WHERE pp3.sub_id = l.sub_id AND pp3.text LIKE '%' || ? || '%')
+    WHERE ` + whereClauses.join(" AND ") + `
     ORDER BY l.processed_at DESC LIMIT 50
-  `, [q, q, q, q, q, q, q, q, q]);
+  `, params);
 }
 
 function _getAllCourses(term) {

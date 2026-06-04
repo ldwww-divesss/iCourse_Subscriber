@@ -252,6 +252,8 @@ document.addEventListener("alpine:init", () => {
     currentPptPages: [],
     detailView: "summary",
     searchQuery: "", searchResults: [],
+    searchCourseFilterQuery: "", searchSelectedCourseIds: [],
+    searchCourseOpen: false,
     commitSha: null,
     setup: { token: "", stuid: "", uispsw: "" },
     setupError: "", setupTesting: false,
@@ -555,10 +557,34 @@ document.addEventListener("alpine:init", () => {
     },
 
     _searchTimeout: null,
+    get searchCourseLabel() {
+      if (!this.searchSelectedCourseIds.length) return "全部课程";
+      return "已选" + this.searchSelectedCourseIds.length + "门";
+    },
+    get searchCourseOptionsFiltered() {
+      var q = (this.searchCourseFilterQuery || "").trim().toLowerCase();
+      var list = this.courses || [];
+      if (!q) return list;
+      return list.filter(function (c) {
+        var title = String(c?.title || "").toLowerCase();
+        var teacher = String(c?.teacher || "").toLowerCase();
+        var cid = String(c?.course_id || "").toLowerCase();
+        return title.indexOf(q) !== -1 || teacher.indexOf(q) !== -1 || cid.indexOf(q) !== -1;
+      });
+    },
+    toggleSearchCourse(courseId, checked) {
+      var cid = String(courseId);
+      var s = new Set(this.searchSelectedCourseIds.map(String));
+      if (checked) s.add(cid); else s.delete(cid);
+      this.searchSelectedCourseIds = Array.from(s);
+      this.doSearch();
+    },
     doSearch() {
       clearTimeout(this._searchTimeout);
       this._searchTimeout = setTimeout(() => {
-        this.searchResults = this.searchQuery.trim() ? ICS.db.searchSummaries(this.searchQuery) : [];
+        this.searchResults = this.searchQuery.trim()
+          ? ICS.db.searchSummaries(this.searchQuery, this.searchSelectedCourseIds)
+          : [];
       }, 300);
     },
 
