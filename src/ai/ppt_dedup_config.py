@@ -11,14 +11,14 @@ from __future__ import annotations
 # ── DHASH dedup config ──────────────────────────────────────────────────────
 # Used by dedup_dhash() before OCR — drops near-duplicate frames by perceptual
 # hash so OCR only runs on visually distinct pages.
-DHASH_WINDOW: int = 10       # sliding window size (images to compare against)
-DHASH_THRESHOLD: int = 2     # max Hamming-distance bits to consider "duplicate"
+DHASH_WINDOW: int = 30       # sliding window size (images to compare against)
+DHASH_THRESHOLD: int = 3     # max Hamming-distance bits to consider "duplicate"
 
 # ── Text subset dedup config ────────────────────────────────────────────────
 # Used by dedup_text_subset() after OCR — removes pages whose text is a
 # near-subset of a nearby page (common with PPT animation reveals).
 SUBSET_CONFIG: dict = {
-    "window": 8,                  # look-back window (kept pages)
+    "window": 20,                  # look-back window (kept pages)
     "ngram_n": 3,                 # n-gram size for containment scoring
     "containment_threshold": 0.85,  # min n-gram containment to flag subset
     "min_length_ratio": 1.10,     # long/short length ratio must exceed this
