@@ -91,16 +91,34 @@ def _enumerate_lectures(client: ICourseClient, db: Database,
 
             # School system sometimes lists duplicate lectures; dedup the
             # raw list so the same logic produces the same outcome each run.
-            seen_sub_titles: set[str] = set()
+            # When a sub_title appears more than once, keep the first one
+            # that has playback; if none have playback, keep the first.
+            seen_sub_titles: dict[str, dict] = {}
             deduped = []
             for lec in lectures:
                 title = lec.get("sub_title", "")
-                if title and title in seen_sub_titles:
-                    reporter.course_dedup_skip(title, lec["sub_id"])
+                if not title:
+                    deduped.append(lec)
                     continue
-                if title:
-                    seen_sub_titles.add(title)
-                deduped.append(lec)
+                existing = seen_sub_titles.get(title)
+                if existing is None:
+                    # first occurrence — if it has playback, keep it;
+                    # otherwise tentatively store it and look for a
+                    # playback-capable duplicate.
+                    if lec.get("has_playback"):
+                        seen_sub_titles[title] = lec
+                        deduped.append(lec)
+                    else:
+                        seen_sub_titles[title] = lec
+                        deduped.append(lec)
+                elif not existing.get("has_playback") and lec.get("has_playback"):
+                    # replace the earlier no-playback entry with this one
+                    deduped.remove(existing)
+                    seen_sub_titles[title] = lec
+                    deduped.append(lec)
+                    reporter.course_dedup_skip(title, existing["sub_id"])
+                else:
+                    reporter.course_dedup_skip(title, lec["sub_id"])
             lectures = deduped
 
             known_processed = db.get_processed_sub_ids(course_id)
