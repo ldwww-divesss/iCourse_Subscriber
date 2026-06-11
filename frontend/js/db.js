@@ -293,7 +293,7 @@ function _getAllCoursesTerms() {
 function _buildCatalogWhere(filters) {
   // Shared WHERE/params builder for paged search + count + dept distinct.
   // Filters: { terms: string[], depts: string[], title: string, teacher: string }
-  var clauses = [];
+  var clauses = ["term NOT GLOB '*_19_*'", "term != '25'"];
   var params = [];
   if (filters.terms && filters.terms.length) {
     clauses.push("term IN (" + filters.terms.map(function () { return "?"; }).join(",") + ")");
