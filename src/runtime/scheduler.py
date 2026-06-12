@@ -408,10 +408,16 @@ class Scheduler:
             reporter=reporter,
         )
 
-    def prefetch_lecture(self, client, course_id: str, sub_id: str) -> None:
-        """Schedule image + audio prefetch for a future lecture."""
+    def prefetch_lecture(self, client, course_id: str, sub_id: str,
+                         *, audio: bool = True) -> None:
+        """Schedule image (always) + audio (optional) prefetch for a future
+        lecture.  Pass ``audio=False`` when the caller already knows
+        transcription won't read the stream (cached or official
+        transcript) — the ffmpeg download is a full pull of the lecture
+        and would otherwise hold one of the two slots for nothing."""
         self.image_cache.schedule(client, course_id, sub_id)
-        self.audio_downloader.schedule(client, course_id, sub_id)
+        if audio:
+            self.audio_downloader.schedule(client, course_id, sub_id)
 
     def submit_ocr(self, fn: Callable, *args, **kwargs) -> Future:
         """Submit an OCR job.  Live concurrency is capped at

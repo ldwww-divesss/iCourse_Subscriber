@@ -167,12 +167,12 @@ def _drive_lectures(client: ICourseClient, db: Database,
     if not all_lectures:
         return
 
-    first_course, _, first_lec = all_lectures[0]
-    scheduler.prefetch_lecture(client, first_course, str(first_lec["sub_id"]))
-
     runner = LectureRunner(
         client, db, scheduler, transcriber, summarizer, reporter,
     )
+
+    first_course, _, first_lec = all_lectures[0]
+    runner.prefetch_first(first_course, str(first_lec["sub_id"]))
 
     for i, (course_id, course_title, lecture) in enumerate(all_lectures):
         sub_id = str(lecture["sub_id"])

@@ -61,6 +61,10 @@ class LectureRunner:
         self._summarizer = summarizer
         self._reporter = reporter
         self._ppt = PPTPipeline(db, scheduler, reporter)
+        # Official-transcript segments fetched during the prefetch decision
+        # (``_needs_audio``), keyed by sub_id, so ``_get_transcript`` doesn't
+        # re-fetch them one lecture later.
+        self._official_cache: dict[str, list[dict]] = {}
 
     # ── Public entry point ──────────────────────────────────────────────
 
@@ -164,27 +168,74 @@ class LectureRunner:
             and existing.get("summary")
         )
 
+    def prefetch_first(self, course_id: str, sub_id: str) -> None:
+        """Prefetch for the first lecture in the batch — same decision
+        logic (skip the audio download when transcription won't need it)
+        as the in-loop Phase C prefetch."""
+        self._schedule_next((course_id, sub_id))
+
     def _schedule_next(self, next_info: Optional[tuple[str, str]]):
         if next_info is None:
             return
         next_course, next_sub = next_info
-        # Image + audio prefetch in one call. Both are idempotent so
-        # repeated invocations are no-ops; the audio side will block on its
-        # semaphore until a download slot frees.
-        self._scheduler.prefetch_lecture(self._client, next_course, next_sub)
+        # Image prefetch is always useful; the audio download — a full
+        # ffmpeg pull of the lecture — only when the next lecture will
+        # actually be ASR-transcribed.  Both are idempotent so repeated
+        # invocations are no-ops; the audio side blocks on its semaphore
+        # until a download slot frees.
+        self._scheduler.prefetch_lecture(
+            self._client, next_course, next_sub,
+            audio=self._needs_audio(next_sub),
+        )
+
+    def _needs_audio(self, sub_id: str) -> bool:
+        """False when transcription won't need the audio stream: a cached
+        transcript exists, or the official transcript looks usable.  Keeps
+        prefetching from spending a download slot (and a full lecture of
+        bandwidth) on audio that would just be killed in Phase H."""
+        existing = self._db.get_lecture(sub_id)
+        if existing and existing.get("transcript"):
+            return False
+        if config.USE_OFFICIAL_TRANSCRIPT:
+            try:
+                segments = self._client.get_transcript_segments(sub_id)
+                # No tail hint at prefetch time — the lecture's PPT rows
+                # aren't registered yet.  _get_transcript re-checks with
+                # the hint and schedules the download then if needed.
+                if self._official_transcript_usable(segments):
+                    self._official_cache[sub_id] = segments
+                    return False
+            except Exception as e:
+                self._reporter.info(
+                    f"    [Official transcript] probe for {sub_id} failed: "
+                    f"{type(e).__name__}: {e}"
+                )
+        return True
 
     @staticmethod
     def _official_transcript_usable(segments: list[dict] | None,
-                                    max_gap_minutes: int = 20) -> bool:
-        """True if the official transcript is complete enough to use."""
+                                    max_gap_minutes: int = 20,
+                                    duration_hint_s: int = 0) -> bool:
+        """True if the official transcript is complete enough to use.
+
+        Looks for a >``max_gap_minutes`` hole in three places: before the
+        first segment (head truncation), between segments, and — when a
+        duration hint is known (the last PPT screenshot offset, a lower
+        bound on lecture length) — after the last segment (tail
+        truncation)."""
         if not segments:
             return False
-        max_gap_s = 0
-        for i in range(1, len(segments)):
-            gap = segments[i]["start_ms"] - segments[i - 1]["end_ms"]
-            if gap > max_gap_s:
-                max_gap_s = gap
-        return max_gap_s <= max_gap_minutes * 60_000
+        max_gap_ms = max_gap_minutes * 60_000
+        if segments[0]["start_ms"] > max_gap_ms:
+            return False
+        prev_end = segments[0]["end_ms"]
+        for seg in segments[1:]:
+            if seg["start_ms"] - prev_end > max_gap_ms:
+                return False
+            prev_end = max(prev_end, seg["end_ms"])
+        if duration_hint_s and duration_hint_s * 1000 - prev_end > max_gap_ms:
+            return False
+        return True
 
     def _get_transcript(self, existing: dict | None, course_id: str,
                         sub_id: str) -> tuple[Optional[str], Optional[list]]:
@@ -205,17 +256,31 @@ class LectureRunner:
         # Try official transcript before firing up ASR (config-gated).
         if config.USE_OFFICIAL_TRANSCRIPT:
             try:
-                official = self._client.get_transcript_segments(sub_id)
-                if self._official_transcript_usable(official):
+                official = self._official_cache.pop(sub_id, None)
+                if official is None:
+                    official = self._client.get_transcript_segments(sub_id)
+                # Phase B registered the PPT rows, so the last screenshot
+                # offset is available as a duration lower bound for the
+                # tail-truncation check.
+                duration_hint = self._db.get_max_ppt_created_sec(sub_id)
+                if self._official_transcript_usable(
+                        official, duration_hint_s=duration_hint):
                     text = " ".join(s["text"] for s in official)
                     self._reporter.info(
                         f"    Using official transcript "
                         f"({len(text)} chars, {len(official)} segments)"
                     )
                     self._db.update_transcript(sub_id, text)
+                    # The audio may have been prefetched before we knew the
+                    # official transcript was usable — stop that download
+                    # now instead of letting it run until Phase H.
+                    self._release_audio(sub_id)
                     return text, official
-            except Exception:
-                pass  # fall through to ASR
+            except Exception as e:
+                self._reporter.info(
+                    f"    [Official transcript] unavailable, falling back "
+                    f"to ASR: {type(e).__name__}: {e}"
+                )
 
         # Pull the audio handle.  ``schedule`` is idempotent — usually the
         # previous lecture already kicked it off (Phase C), but for the
