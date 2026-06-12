@@ -89,29 +89,39 @@ jobs:
             fi
           done
 
-      - name: Remove course from COURSE_IDS secret (only when entire course deleted)
-        if: ${{ inputs.sub_ids == '' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          IFS=',' read -ra CIDS <<< "${{ inputs.course_ids }}"
-          current=$(gh secret list --repo ${{ github.repository }} --json name,value | jq -r '.[] | select(.name=="COURSE_IDS") | .value' 2>/dev/null || echo "")
-          for cid in "${CIDS[@]}"; do
-            cid=$(echo "$cid" | xargs)
-            current=$(echo "$current" | tr ',' '\n' | grep -v "^$cid$" | tr '\n' ',' | sed 's/,$//' | sed 's/^,//')
-          done
-          if [ -n "$current" ]; then
-            gh secret set COURSE_IDS --repo ${{ github.repository }} --body "$current"
-          fi
+      # NOTE: COURSE_IDS is deliberately NOT touched here.  GitHub's
+      # Secrets API is write-only (values can never be read back), so a
+      # workflow cannot remove one ID from the list.  The frontend's
+      # subscription editor owns that secret — it re-encrypts and PUTs
+      # the full list whenever the user changes their subscription.
 
       - name: Re-shard and push
         env:
           STUID: ${{ secrets.STUID }}
           UISPSW: ${{ secrets.UISPSW }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python scripts/db_shard.py shard data/icourse.db data/sharded
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add -A
-          git commit -m "chore: delete ${{ inputs.sub_ids != '' && 'lecture(s)' || 'course(s)' }} ${{ inputs.sub_ids || inputs.course_ids }}" || echo "No changes"
-          git push origin HEAD:data
+          # Shard into a fresh directory — data/sharded still holds the
+          # fetched pre-delete shard files, and a deleted course's shard
+          # must not survive into the push.
+          rm -rf data/sharded_out
+          mkdir -p data/sharded_out
+          python scripts/db_shard.py shard data/icourse.db data/sharded_out
+
+          # data/ is gitignored in the source tree and the data branch has
+          # unrelated history, so stage to a clean tree and force-push —
+          # the same pattern check.yml / single_run.yml use.
+          rm -rf /tmp/db_deploy
+          mkdir -p /tmp/db_deploy/data/shards
+          cp data/sharded_out/icourse-index.enc /tmp/db_deploy/data/
+          cp data/sharded_out/shards/*.db.gz.enc /tmp/db_deploy/data/shards/
+          cd /tmp/db_deploy
+
+          git init -q
+          git checkout -q -b data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git commit -q -m "chore: delete ${{ inputs.sub_ids != '' && 'lecture(s)' || 'course(s)' }} ${{ inputs.sub_ids || inputs.course_ids }}"
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
+          git push --force origin data
