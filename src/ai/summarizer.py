@@ -97,7 +97,9 @@ class Summarizer:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {
                     "role": "user",
-                    "content": f"以下是课程《{title}》的录音文本，根据长度，你应该输出的字符数大约为{len(content)/7}字，请开始总结：\n\n{content}",
+                    # 注意：这里的 1:7 与 system prompt 中声称的 1:8 不一致是有意为之
+                    # （给模型一个略偏长的信号修正其实际输出偏短的倾向），勿"修复"。
+                    "content": f"以下是课程《{title}》的录音文本，根据长度，你应该输出的字符数大约为{len(content) // 7}字，请开始总结：\n\n{content}",
                 },
             ],
             # temperature=0.3,
