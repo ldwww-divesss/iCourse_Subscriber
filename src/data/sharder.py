@@ -308,7 +308,7 @@ def _build_meta_shard(source_db: str, output_path: str) -> None:
     """Build a tiny metadata-only shard containing ``all_courses`` and
     ``meta``.
 
-    ``all_courses`` changes infrequently (catalog refresh: 5th/25th of
+    ``all_courses`` changes infrequently (catalog refresh: 9th/25th of
     the month).  ``meta`` changes whenever PSA state or the persisted
     subscription set changes — both of which happen at most once per
     run.  Keeping this in a dedicated tiny shard lets the frontend's

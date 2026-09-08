@@ -164,7 +164,7 @@ class Database:
         """True if the catalog has any rows — cheap existence probe.
 
         Used by the nightly run to decide whether to skip the catalog
-        crawl on non-5th/25th days.  ``SELECT 1 ... LIMIT 1`` runs in
+        crawl on non-9th/25th days.  ``SELECT 1 ... LIMIT 1`` runs in
         microseconds even with 20k rows; the previous ``bool(list_all_courses())``
         materialised the whole catalog into Python just to call ``bool`` on it.
         """
