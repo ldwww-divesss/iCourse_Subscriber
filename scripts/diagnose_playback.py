@@ -10,10 +10,33 @@ from src.api.icourse import ICourseClient
 from src.api.webvpn import WebVPNSession
 
 
+def login():
+    for attempt in range(3):
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                vpn = WebVPNSession()
+                vpn.login()
+                vpn.authenticate_icourse()
+            return vpn
+        except Exception as exc:
+            print(json.dumps({'login_attempt': attempt + 1, 'error_type': type(exc).__name__}), flush=True)
+            if attempt == 2:
+                raise
+            time.sleep(5)
+
+
 def request(client, path, params):
-    response = client.vpn.get(client.base_url + path, params=params)
-    response.raise_for_status()
-    return response.json()
+    for attempt in range(2):
+        try:
+            response = client.vpn.get(client.base_url + path, params=params)
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            if attempt == 1:
+                raise
+            print(json.dumps({'retry': path.rsplit('/', 1)[-1], 'error_type': type(exc).__name__}), flush=True)
+            client.vpn = login()
+            client._userinfo = None
 
 
 def url_count(value):
@@ -25,20 +48,7 @@ def url_count(value):
 
 
 def main():
-    vpn = None
-    for attempt in range(3):
-        try:
-            with contextlib.redirect_stdout(io.StringIO()):
-                vpn = WebVPNSession()
-                vpn.login()
-                vpn.authenticate_icourse()
-            break
-        except Exception as exc:
-            print(json.dumps({'login_attempt': attempt + 1, 'error_type': type(exc).__name__}), flush=True)
-            if attempt == 2:
-                raise SystemExit(1)
-            time.sleep(5)
-    client = ICourseClient(vpn)
+    client = ICourseClient(login())
     for course_id in os.environ.get('DIAGNOSTIC_COURSE_IDS', '11551,38835').split(','):
         course_id = course_id.strip()
         if not course_id.isdigit():
@@ -52,7 +62,9 @@ def main():
                  for days in months.values() for entries in days.values() for item in entries if 'id' in item]
         print(json.dumps({'course_id': course_id, 'lecture_count': len(items),
                           'playback_status_counts': dict(Counter(str(item.get('playback_status')) for item in items))}), flush=True)
-        for item in items:
+        # Sample first, middle and last lectures to limit diagnostic traffic.
+        samples = [items[i] for i in sorted({0, len(items) // 2, len(items) - 1})] if items else []
+        for item in samples:
             result = {'course_id': course_id, 'sub_id': item['id'], 'date': item.get('sub_title', '')[:10],
                       'playback_status': item.get('playback_status')}
             for name, path in (
@@ -62,6 +74,9 @@ def main():
                 try:
                     payload = request(client, path, {'course_id': course_id, 'sub_id': item['id']})
                     result[name + '_api_code'] = payload.get('code')
+                    message = payload.get('msg')
+                    if isinstance(message, str) and 'http' not in message.lower() and len(message) <= 120:
+                        result[name + '_message'] = message
                     # Only inspect successful responses. Never sign or request media URLs.
                     if payload.get('code') == 0:
                         body = payload.get('data') or {}
