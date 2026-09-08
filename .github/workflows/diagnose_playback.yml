@@ -1,0 +1,27 @@
+name: Diagnose Playback
+on:
+  workflow_dispatch:
+    inputs:
+      course_ids:
+        description: Course IDs to inspect (metadata only)
+        required: true
+        default: '11551,38835'
+        type: string
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests pycryptodome
+      - name: Inspect playback metadata
+        env:
+          StuId: ${{ secrets.STUID }}
+          UISPsw: ${{ secrets.UISPSW }}
+          DIAGNOSTIC_COURSE_IDS: ${{ inputs.course_ids }}
+        run: python -u -m scripts.diagnose_playback
