@@ -47,6 +47,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from src.api import icourse
+from src.runtime import config
 from src.ai.ocr import ocr_image_text
 from src.ai.ppt_dedup import clean_ppt_text, compute_dhash, dedup_dhash, is_invalid_page, match_garbage
 
@@ -122,7 +123,7 @@ class PPTAsyncHandle:
             self._images = None  # release memory
         done = invalid = 0
         failed = self._presubmit_failed
-        for fut in as_completed(self._futures):
+        for fut in as_completed(self._futures, timeout=config.PPT_WAIT_TIMEOUT_SECONDS):
             try:
                 _page_num, status = fut.result()
             except Exception as e:
@@ -265,11 +266,13 @@ class PPTPipeline:
         worker thread, then block for the OCR futures it submitted."""
         t = self._prefetch_threads.pop(sub_id, None)
         if t is not None:
-            t.join()
+            t.join(timeout=config.PPT_WAIT_TIMEOUT_SECONDS)
+            if t.is_alive():
+                raise TimeoutError(f"PPT prefetch thread timed out for {sub_id}")
         futs = self._prefetched_ocr.pop(sub_id, None)
         if not futs:
             return
-        for fut in as_completed(futs):
+        for fut in as_completed(futs, timeout=config.PPT_WAIT_TIMEOUT_SECONDS):
             try:
                 fut.result()
             except Exception:

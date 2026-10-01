@@ -78,6 +78,30 @@
 
 首次运行会处理所有已有录播，后续只处理新增课次。
 
+### 运行超时与模型回退
+
+每节课在独立进程中处理，默认最多运行 30 分钟。超时后会停止该课次和它的
+音频下载，保留已经提交的转录、OCR 和摘要数据，记录错误并继续后面的课次。
+下一次运行会从已保存的数据继续。连续失败 3 次的课次暂停自动重试，防止每天
+都被同一节课阻塞。批量处理默认最多运行 320 分钟，为数据库上传预留时间。
+
+在 Settings → Secrets and variables → Actions → Variables 中可以设置
+`LECTURE_TIMEOUT_SECONDS` 和 `MAX_LECTURE_ERRORS`，分别调整单节课秒数上限和
+自动重试次数。较长课程或较慢的 ASR 后端可以适当增加单节课上限。
+
+ModelScope 保留 DeepSeek-V4-Pro 作为首选，备用模型改为
+`Qwen/Qwen3.5-397B-A17B`。该模型的 API 示例见
+[ModelScope 模型页](https://modelscope.cn/models/Qwen/Qwen3.5-397B-A17B)。
+模型返回空 choices、空正文或调用报错时都会尝试下一个模型，API 权限和额度
+仍取决于账户配置。可以在 `src/runtime/config.py` 中修改模型及服务商顺序。
+
+PPT 分页会检测重复页并限制总页数和时间；图片、OCR 和音频停滞也有等待上限。
+日志中的 `[Stage 课次ID]` 标明当前处理阶段，单节课超时前会输出线程堆栈。
+
+本地回归测试使用 Python 3.12，安装 `requirements.txt` 后运行
+`python -m unittest discover -s tests -v`。测试使用模拟响应和临时数据库，
+不需要学号、密码或模型 API Key；推送 Python 修改时会自动运行相同测试。
+
 ## 前端页面（索引与查看）
 
 ![alt text](docs/frontend.png)

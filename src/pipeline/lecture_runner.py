@@ -107,6 +107,7 @@ class LectureRunner:
         # ── Phase B — submit PPT pipeline (fetch + dedup, no OCR yet) ──
         # OCR is deferred (defer_ocr=True) so ASR in Phase D gets exclusive
         # CPU.  OCR will be submitted in Phase E (handle.drain()).
+        self._reporter.info(f"[Stage {sub_id}] Fetching PPT images")
         ppt_handle = self._ppt.submit(
             self._client, course_id, sub_id, defer_ocr=True,
         )
@@ -115,9 +116,11 @@ class LectureRunner:
         # Done BEFORE ASR so the next audio download can start filling its
         # AudioDownloader slot while we transcribe.  Both audio + image
         # prefetches are idempotent so this is safe to call any time.
+        self._reporter.info(f"[Stage {sub_id}] Scheduling next lecture prefetch")
         self._schedule_next(next_info)
 
         # ── Phase D — ASR transcription ────────────────────────────────
+        self._reporter.info(f"[Stage {sub_id}] Getting transcript")
         transcript, transcript_segments = self._get_transcript(
             existing, course_id, sub_id,
         )
@@ -131,6 +134,7 @@ class LectureRunner:
             return None
 
         # ── Phase E — drain remaining OCR work ─────────────────────────
+        self._reporter.info(f"[Stage {sub_id}] Waiting for OCR")
         ppt_stats = ppt_handle.drain()
         _ = ppt_stats  # stats are emitted by PPTAsyncHandle.drain via reporter
 
@@ -383,5 +387,4 @@ class LectureRunner:
             self._reporter.info(
                 f"    [WARN] audio release failed: {type(e).__name__}: {e}"
             )
-
 

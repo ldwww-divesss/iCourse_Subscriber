@@ -23,6 +23,7 @@ from src.api.icourse import ICourseClient
 from src.pipeline.lecture_runner import LectureRunner
 from src.runtime.reporter import Reporter
 from src.runtime.scheduler import Scheduler
+from src.runtime.process_guard import run_with_timeout
 from src.ai.summarizer import Summarizer
 from src.ai.transcriber import Transcriber
 from src.api.webvpn import WebVPNSession
@@ -113,12 +114,18 @@ def _enumerate_lectures(client: ICourseClient, db: Database,
             lectures = deduped
 
             known_processed = db.get_processed_sub_ids(course_id)
+            eligible_retries = db.get_unprocessed_lectures(
+                course_id, max_errors=config.MAX_LECTURE_ERRORS,
+            )
+            retry_ids = {u["sub_id"] for u in eligible_retries}
             new_lectures = [
                 lec for lec in lectures
                 if lec.get("has_playback")
                 and str(lec["sub_id"]) not in known_processed
+                and (str(lec["sub_id"]) in retry_ids
+                     or db.get_lecture(str(lec["sub_id"])) is None)
             ]
-            unprocessed = db.get_unprocessed_lectures(course_id)
+            unprocessed = eligible_retries
             new_ids = {str(lec["sub_id"]) for lec in new_lectures}
             retry_only = [
                 {"sub_id": u["sub_id"], "sub_title": u["sub_title"],
@@ -144,56 +151,80 @@ def _enumerate_lectures(client: ICourseClient, db: Database,
     return out
 
 
-def _drive_lectures(client: ICourseClient, db: Database,
-                    scheduler: Scheduler, transcriber: Transcriber,
-                    summarizer: Summarizer, reporter: Reporter,
+def _process_lecture(vpn: WebVPNSession, db_path: str, course_id: str,
+                     course_title: str, lecture: dict) -> None:
+    """Process one lecture with its own SQLite connection and native runtimes."""
+    db = Database(db_path)
+    reporter = Reporter()
+    scheduler = Scheduler(reporter)
+    sub_id = str(lecture["sub_id"])
+    before = db.get_lecture(sub_id) or {}
+    try:
+        runner = LectureRunner(
+            ICourseClient(vpn), db, scheduler, Transcriber(), Summarizer(), reporter,
+        )
+        runner.prefetch_first(course_id, sub_id)
+        runner.run(course_id, course_title, lecture)
+    except Exception as exc:
+        current = db.get_lecture(sub_id) or {}
+        if (current.get("error_count") or 0) == (before.get("error_count") or 0):
+            db.update_error(sub_id, "process", f"{type(exc).__name__}: {exc}")
+        raise
+    finally:
+        try:
+            scheduler.shutdown()
+        finally:
+            db.conn.close()
+
+
+def _drive_lectures(client: ICourseClient, db: Database, reporter: Reporter,
                     all_lectures: list[tuple[str, str, dict]],
                     email_items: list) -> None:
-    """Phase 2: run each lecture through LectureRunner.
-
-    Pre-schedules the first lecture's prefetch (audio + images) before
-    entering the loop; subsequent prefetches are kicked off from inside
-    each LectureRunner.run via ``next_info``.
-    """
+    """Process lectures independently so a stuck native call cannot stop the batch."""
     if not all_lectures:
         return
 
-    runner = LectureRunner(
-        client, db, scheduler, transcriber, summarizer, reporter,
-    )
-
-    first_course, _, first_lec = all_lectures[0]
-    runner.prefetch_first(first_course, str(first_lec["sub_id"]))
-
-    for i, (course_id, course_title, lecture) in enumerate(all_lectures):
+    deadline = time.monotonic() + config.RUN_BUDGET_SECONDS
+    for course_id, course_title, lecture in all_lectures:
+        remaining = deadline - time.monotonic()
+        if remaining < config.LECTURE_TIMEOUT_SECONDS:
+            reporter.info("[Budget] Stopping batch; remaining lectures will run next time.")
+            break
         sub_id = str(lecture["sub_id"])
-        next_info: tuple[str, str] | None = None
-        if i + 1 < len(all_lectures):
-            next_course, _, next_lec = all_lectures[i + 1]
-            next_info = (next_course, str(next_lec["sub_id"]))
-
-        _check_session(client)
+        before = db.get_lecture(sub_id) or {}
         try:
-            summary = runner.run(
-                course_id, course_title, lecture, next_info=next_info,
+            _check_session(client)
+            timeout = min(config.LECTURE_TIMEOUT_SECONDS, deadline - time.monotonic())
+            if timeout < config.LECTURE_TIMEOUT_SECONDS:
+                reporter.info("[Budget] Stopping batch; remaining lectures will run next time.")
+                break
+            reporter.info(f"[Worker] Lecture {sub_id}, deadline {timeout:.0f}s")
+            exitcode = run_with_timeout(
+                _process_lecture,
+                (client.vpn, db.db_path, course_id, course_title, lecture),
+                timeout,
             )
-            if summary:
+            if exitcode != 0:
+                current = db.get_lecture(sub_id) or {}
+                if (current.get("error_count") or 0) == (before.get("error_count") or 0):
+                    db.update_error(sub_id, "process", f"Worker exited with code {exitcode}")
+                reporter.lecture_error(sub_id)
+                continue
+            current = db.get_lecture(sub_id) or {}
+            if current.get("summary") and not current.get("emailed_at"):
                 email_items.append({
                     "sub_id": sub_id,
                     "course_title": course_title,
                     "sub_title": lecture.get("sub_title", sub_id),
                     "date": lecture.get("date", ""),
-                    "summary": summary,
+                    "summary": current["summary"],
                 })
+        except TimeoutError as exc:
+            db.update_error(sub_id, "timeout", str(exc))
+            reporter.info(f"[Timeout] Lecture {sub_id}: {exc}; continuing batch.")
         except Exception:
             reporter.lecture_error(sub_id)
             traceback.print_exc()
-        finally:
-            # Belt-and-braces: drop any lingering prefetch entry for this
-            # lecture so we don't leak bytes if the runner crashed before
-            # PPTPipeline.submit released the cache.
-            scheduler.image_cache.discard(sub_id)
-            scheduler.audio_downloader.release(sub_id)
 
 
 def _send_email(emailer: Emailer | None, db: Database, reporter: Reporter,
@@ -304,8 +335,6 @@ def run():
     corrected = db.sync_dates_from_sub()
     if corrected:
         print(f"  [Date] Synced {corrected} lecture date(s) from sub_title", flush=True)
-    transcriber = Transcriber()
-    summarizer = Summarizer() if config.COURSE_IDS else None
     emailer = Emailer() if (
         config.SMTP_EMAIL and config.SMTP_PASSWORD
     ) else None
@@ -320,22 +349,15 @@ def run():
     if not config.COURSE_IDS:
         # Crawl-only mode: nothing to process, just persist + exit.
         reporter.info("\n[Crawl-only mode] No COURSE_IDS — skipping lectures.")
+        db.conn.close()
         reporter.run_footer()
         return
 
-    scheduler = Scheduler(reporter=reporter)
-
-    try:
-        all_lectures = _enumerate_lectures(client, db, reporter)
-        _drive_lectures(
-            client, db, scheduler, transcriber, summarizer, reporter,
-            all_lectures, email_items,
-        )
-
-    finally:
-        scheduler.shutdown()
+    all_lectures = _enumerate_lectures(client, db, reporter)
+    _drive_lectures(client, db, reporter, all_lectures, email_items)
 
     _send_email(emailer, db, reporter, email_items)
+    db.conn.close()
     reporter.run_footer()
 
 

@@ -376,6 +376,7 @@ class Transcriber:
         self._init()
         self._reset_vad()
         t0 = time.time()
+        last_data_at = t0
         print(f"[Transcriber] Starting {label} at {time.strftime('%H:%M:%S')}",
               flush=True)
 
@@ -397,10 +398,15 @@ class Transcriber:
             if not raw:
                 if is_eof_fn():
                     break
+                if now - last_data_at > config.ASR_IDLE_TIMEOUT_SECONDS:
+                    raise TimeoutError(
+                        f"No audio data received for {config.ASR_IDLE_TIMEOUT_SECONDS}s"
+                    )
                 if wait_on_empty_sec > 0:
                     time.sleep(wait_on_empty_sec)
                 continue
 
+            last_data_at = now
             total_bytes += len(raw)
             samples = np.frombuffer(raw, dtype=np.float32)
             total_read += len(samples)

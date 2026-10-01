@@ -166,6 +166,8 @@ jobs:
           SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+          LECTURE_TIMEOUT_SECONDS: ${{ vars.LECTURE_TIMEOUT_SECONDS || '1800' }}
+          MAX_LECTURE_ERRORS: ${{ vars.MAX_LECTURE_ERRORS || '3' }}
           # All secrets, JSON-encoded. provider_env.py exports only the
           # vars named by config.MODEL_PROVIDERS (api_key_env /
           # base_url_env), so user-defined providers with custom env-var

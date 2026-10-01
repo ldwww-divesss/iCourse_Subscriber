@@ -84,7 +84,7 @@ class Summarizer:
                 "Set at least one provider's API key (e.g. DASHSCOPE_API_KEY)."
             )
         self._clients = {
-            p["name"]: OpenAI(api_key=p["api_key"], base_url=p["base_url"])
+            p["name"]: OpenAI(api_key=p["api_key"], base_url=p["base_url"], max_retries=0)
             for p in self.providers
         }
 
@@ -103,11 +103,14 @@ class Summarizer:
                 },
             ],
             # temperature=0.3,
-            timeout=180,
+            timeout=config.LLM_TIMEOUT_SECONDS,
         )
         if not response.choices:
-            raise ValueError("API returned empty choices — likely content filter or quota exceeded")
+            raise ValueError("API returned empty choices; provider did not return a summary")
         result = response.choices[0].message.content
+        if not isinstance(result, str) or not result.strip():
+            raise ValueError("API returned empty summary content")
+        result = result.strip()
         elapsed = time.time() - t0
         # Token usage helps explain run cost — every provider's billing is
         # token-based, and rate-limit decisions key off prompt size much

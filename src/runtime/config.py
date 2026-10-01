@@ -32,7 +32,7 @@ MODEL_PROVIDERS: list[dict] = [
         "default_base_url": "https://api-inference.modelscope.cn/v1/",
         "models": [
             "deepseek-ai/DeepSeek-V4-Pro",
-            "deepseek-ai/DeepSeek-V4-Flash"
+            "Qwen/Qwen3.5-397B-A17B",
         ],
     },
     {
@@ -163,6 +163,17 @@ OCR_MAX_TARGET = int(os.environ.get("OCR_MAX_TARGET", "2"))
 VIDEO_DOWNLOAD_CONCURRENCY = int(
     os.environ.get("VIDEO_DOWNLOAD_CONCURRENCY", "2")
 )
+
+# Bound individual lectures, including native ASR/OCR and cleanup. Timed-out
+# workers are stopped by the parent process; completed DB writes survive.
+LECTURE_TIMEOUT_SECONDS = int(os.environ.get("LECTURE_TIMEOUT_SECONDS", "1800"))
+RUN_BUDGET_SECONDS = int(os.environ.get("RUN_BUDGET_SECONDS", "19200"))
+PPT_WAIT_TIMEOUT_SECONDS = int(os.environ.get("PPT_WAIT_TIMEOUT_SECONDS", "300"))
+PPT_FETCH_TIMEOUT_SECONDS = int(os.environ.get("PPT_FETCH_TIMEOUT_SECONDS", "120"))
+PPT_MAX_PAGES = int(os.environ.get("PPT_MAX_PAGES", "100"))
+MAX_LECTURE_ERRORS = int(os.environ.get("MAX_LECTURE_ERRORS", "3"))
+LLM_TIMEOUT_SECONDS = int(os.environ.get("LLM_TIMEOUT_SECONDS", "180"))
+ASR_IDLE_TIMEOUT_SECONDS = int(os.environ.get("ASR_IDLE_TIMEOUT_SECONDS", "120"))
 
 # 是否优先使用 iCourse 官方字幕（跳过 ASR 转录）。默认关闭。
 USE_OFFICIAL_TRANSCRIPT = (

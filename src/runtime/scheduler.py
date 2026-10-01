@@ -100,9 +100,12 @@ class PrefetchCache:
             return [], {}
         items = entry.get("items") or []
         images: dict[int, bytes] = {}
+        deadline = time.monotonic() + config.PPT_WAIT_TIMEOUT_SECONDS
         for page_num, fut in entry.get("futures", {}).items():
             try:
-                img = fut.result()
+                img = fut.result(timeout=max(0, deadline - time.monotonic()))
+            except TimeoutError:
+                raise TimeoutError(f"Image prefetch timed out for {sub_id}") from None
             except Exception as e:
                 print(
                     f"    [Prefetch {sub_id}] page {page_num} download "
@@ -217,6 +220,7 @@ class AudioDownloader:
 
                 cmd = [
                     "ffmpeg", "-y",
+                    "-rw_timeout", "30000000",
                     "-headers", headers,
                     "-reconnect", "1",
                     "-reconnect_streamed", "1",

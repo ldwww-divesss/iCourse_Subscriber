@@ -137,36 +137,39 @@ class ICourseClient:
         title = course_data.get("title", "Unknown")
         teacher = course_data.get("realname", "Unknown")
 
-        # Parse the nested sub_list: {year: {month: {day: [items]}}}
+        # Empty calendars can be []; populated responses may be a flat list
+        # or the usual {year: {month: {day: [items]}}} calendar.
         lectures = []
-        sub_list = course_data.get("sub_list", {})
-        for year, months in sub_list.items():
-            for month, days in months.items():
-                for day, items in days.items():
-                    for item in items:
-                        if "id" in item:
-                            sub_title = item.get("sub_title", "")
-                            # Real lecture date is embedded in sub_title
-                            # ("2026-03-05第6-8节" → "2026-03-05"); fall back
-                            # to the server's year/month/day keys if missing.
-                            # Zero-pad the fallback so SQLite ORDER BY works.
-                            date = (
-                                _extract_date_from_sub(sub_title)
-                                or f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
-                            )
-                            lectures.append(
-                                {
-                                    "sub_id": item["id"],
-                                    "sub_title": sub_title,
-                                    "lecturer_name": item.get(
-                                        "lecturer_name", ""
-                                    ),
-                                    "date": date,
-                                    "has_playback": str(item.get("playback_status")) == "1",
-                                }
-                            )
+        for item, date_keys in self._lecture_items(course_data.get("sub_list")):
+            sub_title = item.get("sub_title", "")
+            date = _extract_date_from_sub(sub_title)
+            if not date and len(date_keys) == 3:
+                try:
+                    year, month, day = map(int, date_keys)
+                    date = f"{year:04d}-{month:02d}-{day:02d}"
+                except (ValueError, TypeError):
+                    pass
+            lectures.append({
+                "sub_id": item["id"],
+                "sub_title": sub_title,
+                "lecturer_name": item.get("lecturer_name", ""),
+                "date": date or "",
+                "has_playback": str(item.get("playback_status")) == "1",
+            })
 
         return {"title": title, "teacher": teacher, "lectures": lectures}
+
+    @staticmethod
+    def _lecture_items(node, date_keys=()):
+        if isinstance(node, dict):
+            if "id" in node:
+                yield node, date_keys
+            else:
+                for key, value in node.items():
+                    yield from ICourseClient._lecture_items(value, date_keys + (key,))
+        elif isinstance(node, list):
+            for value in node:
+                yield from ICourseClient._lecture_items(value, date_keys)
 
     def get_ppt_list(self, course_id: str, sub_id: str,
                      per_page: int = 100) -> list[dict]:
@@ -184,9 +187,16 @@ class ICourseClient:
         Sorted by created_sec ascending.
         """
         import json
+        if per_page <= 0:
+            raise ValueError("per_page must be positive")
         items = []
         page = 1
+        seen_pages = set()
+        deadline = time.monotonic() + config.PPT_FETCH_TIMEOUT_SECONDS
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or page > config.PPT_MAX_PAGES:
+                raise TimeoutError(f"PPT pagination limit reached for {sub_id} (page {page})")
             url = f"{self.base_url}/pptnote/v1/schedule/search-ppt"
             resp = self.vpn.get(
                 url,
@@ -194,6 +204,7 @@ class ICourseClient:
                     "course_id": course_id, "sub_id": sub_id,
                     "page": page, "per_page": per_page,
                 },
+                timeout=min(60, remaining),
             )
             resp.raise_for_status()
             data = resp.json()
@@ -202,6 +213,10 @@ class ICourseClient:
             page_items = data.get("list", [])
             if not page_items:
                 break
+            fingerprint = json.dumps(page_items, sort_keys=True, ensure_ascii=False)
+            if fingerprint in seen_pages:
+                raise RuntimeError(f"PPT API repeated a page for {sub_id} (page {page})")
+            seen_pages.add(fingerprint)
             for raw in page_items:
                 try:
                     content = json.loads(raw.get("content", "{}"))
