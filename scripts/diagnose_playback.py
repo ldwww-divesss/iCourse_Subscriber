@@ -96,10 +96,18 @@ def main():
                         result[name + '_playback_keys'] = sorted(playback) if isinstance(playback, dict) else []
                         result[name + '_url_count'] = url_count(body)
                         result[name + '_video_list_type'] = type(body.get('video_list')).__name__
-                        for field in ('status', 'playback_status', 'is_open', 'open_time', 'review_status'):
+                        for field in ('status', 'playback_status', 'is_open', 'open_time', 'review_status',
+                                      'can_watch', 'play_msg', 'sub_status', 'sub_review_type',
+                                      'replay_open_at', 'duration', 'is_m3u8'):
                             value = body.get(field)
                             if isinstance(value, (int, bool)) or (isinstance(value, str) and len(value) < 40 and 'http' not in value.lower()):
                                 result[name + '_' + field] = value
+                        for field in ('download_url', 'file_list', 'resource', 'trans_socket_url', 'webp_path'):
+                            result[name + '_content_' + field + '_urls'] = url_count(content.get(field))
+                        for field in ('save_playback', 'process_type', 'start_at', 'end_at'):
+                            value = content.get(field)
+                            if isinstance(value, (int, bool)) or (isinstance(value, str) and len(value) < 40 and 'http' not in value.lower()):
+                                result[name + '_content_' + field] = value
                 except Exception as exc:
                     result[name + '_error_type'] = type(exc).__name__
                 time.sleep(0.3)
