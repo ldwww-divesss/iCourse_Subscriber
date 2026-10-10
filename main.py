@@ -15,6 +15,8 @@ Anything more interesting belongs in one of ``src/*`` modules.
 
 import time
 import traceback
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from src.runtime import config
 from src.data.database import Database
@@ -148,6 +150,8 @@ def _enumerate_lectures(client: ICourseClient, db: Database,
         except Exception:
             reporter.course_enumeration_error(course_id)
             traceback.print_exc()
+    # New lectures get the budget before historical recordings and retries.
+    out.sort(key=lambda entry: entry[2].get("date", ""), reverse=True)
     return out
 
 
@@ -281,12 +285,14 @@ def _crawl_semester_catalog(client: ICourseClient, db: Database,
                   f"{', '.join(t['name'] for t in terms)}")
 
     known_terms = db.list_catalog_terms()
-    new_terms = [term for term in terms if term["name"] not in known_terms]
-    if not new_terms:
+    refresh_catalog = datetime.now(ZoneInfo("Asia/Shanghai")).day in (9, 25)
+    terms_to_fetch = [term for term in terms
+                      if refresh_catalog or term["name"] not in known_terms]
+    if not terms_to_fetch:
         reporter.info("Skipping catalog crawl (no new semesters).")
         return
 
-    for term_info in new_terms:
+    for term_info in terms_to_fetch:
         code = term_info["code"]
         name = term_info["name"]
         expected = term_info["count"]

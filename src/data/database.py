@@ -3,7 +3,7 @@
 import os
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from src.runtime import config
 from src.data.schema import (
@@ -196,20 +196,23 @@ class Database:
                                   max_errors: int = 3) -> list[dict]:
         """Return lectures that need (re-)processing.
 
-        Only returns lectures whose ``error_count`` is below *max_errors* —
-        a permanently-failing lecture (e.g. ``get-sub-info`` RuntimeError
-        for a removed recording) is abandoned after that many attempts
-        rather than clogging every workflow run.
+        After max_errors, wait for a cooldown instead of abandoning the
+        lecture forever. Old rows without a failure timestamp are eligible
+        once; the next failure starts their cooldown.
         """
         query = (
             "SELECT * FROM lectures"
             " WHERE processed_at IS NULL"
-            "   AND (error_count IS NULL OR error_count < ?)"
+            "   AND (error_count IS NULL OR error_count < ?"
+            "        OR last_error_at IS NULL OR last_error_at <= ?)"
         )
-        params: tuple = (max_errors,)
+        cutoff = (datetime.now() - timedelta(
+            seconds=config.LECTURE_RETRY_COOLDOWN_SECONDS,
+        )).isoformat()
+        params: tuple = (max_errors, cutoff)
         if course_id:
             query += " AND course_id = ?"
-            params = (max_errors, course_id)
+            params = (*params, course_id)
         with self._lock:
             rows = self.conn.execute(query, params).fetchall()
         return [dict(row) for row in rows]
@@ -252,9 +255,10 @@ class Database:
             self.conn.execute(
                 """UPDATE lectures
                    SET error_stage = ?, error_msg = ?,
-                       error_count = COALESCE(error_count, 0) + 1
+                       error_count = COALESCE(error_count, 0) + 1,
+                       last_error_at = ?
                    WHERE sub_id = ?""",
-                (stage, error_msg, sub_id),
+                (stage, error_msg, datetime.now().isoformat(), sub_id),
             )
 
     def clear_error(self, sub_id: str):
@@ -262,7 +266,8 @@ class Database:
         with self._lock, self.conn:
             self.conn.execute(
                 """UPDATE lectures
-                   SET error_stage = NULL, error_msg = NULL, error_count = 0
+                   SET error_stage = NULL, error_msg = NULL, error_count = 0,
+                       last_error_at = NULL
                    WHERE sub_id = ?""",
                 (sub_id,),
             )

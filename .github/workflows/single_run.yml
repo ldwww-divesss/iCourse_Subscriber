@@ -168,15 +168,14 @@ jobs:
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
           LECTURE_TIMEOUT_SECONDS: ${{ vars.LECTURE_TIMEOUT_SECONDS || '1800' }}
           MAX_LECTURE_ERRORS: ${{ vars.MAX_LECTURE_ERRORS || '3' }}
-          # All secrets, JSON-encoded. provider_env.py exports only the
+          LECTURE_RETRY_COOLDOWN_SECONDS: ${{ vars.LECTURE_RETRY_COOLDOWN_SECONDS || '86400' }}
+          # All secrets, JSON-encoded. provider_env.py passes only the
           # vars named by config.MODEL_PROVIDERS (api_key_env /
           # base_url_env), so user-defined providers with custom env-var
           # names work without editing this workflow.
           SECRETS_CONTEXT: ${{ toJSON(secrets) }}
         run: |
-          eval "$(python scripts/provider_env.py)"
-          unset SECRETS_CONTEXT
-          python -u main.py
+          python scripts/provider_env.py -- python -u main.py
 
       - name: Deploy database to data branch
         if: always()

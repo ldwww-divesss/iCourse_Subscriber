@@ -82,12 +82,22 @@
 
 每节课在独立进程中处理，默认最多运行 30 分钟。超时后会停止该课次和它的
 音频下载，保留已经提交的转录、OCR 和摘要数据，记录错误并继续后面的课次。
-下一次运行会从已保存的数据继续。连续失败 3 次的课次暂停自动重试，防止每天
-都被同一节课阻塞。批量处理默认最多运行 320 分钟，为数据库上传预留时间。
+下一次运行会从已保存的数据继续。连续失败 3 次的课次进入 24 小时冷却，
+冷却后仍可重试，避免临时网络故障造成永久漏课。最近的课次优先处理，历史
+积压随后处理。批量处理默认最多运行 320 分钟，为数据库上传预留时间。
 
 在 Settings → Secrets and variables → Actions → Variables 中可以设置
-`LECTURE_TIMEOUT_SECONDS` 和 `MAX_LECTURE_ERRORS`，分别调整单节课秒数上限和
-自动重试次数。较长课程或较慢的 ASR 后端可以适当增加单节课上限。
+`LECTURE_TIMEOUT_SECONDS`、`MAX_LECTURE_ERRORS` 和
+`LECTURE_RETRY_COOLDOWN_SECONDS`，分别调整单节课秒数上限、进入冷却前的失败
+次数和冷却秒数。较长课程或较慢的 ASR 后端可以适当增加单节课上限。
+
+每次运行会发现新学期；每月 9 日和 25 日（北京时间）也会刷新已知学期目录。
+
+如果 Actions 显示 `action_required`，且页面提示工作流可能恶意，程序尚未启动。
+检查工作流内容后，由有写权限的用户在登录 GitHub 的网页中点击批准运行。
+此审核必须通过网页完成，修改代码或通过 API 重跑不能替代它。批准后只需补跑
+一次订阅检查，数据库会保留已完成的记录，并补处理遗漏课次。
+参见 [GitHub 的工作流审核说明](https://github.blog/changelog/2026-07-28-github-actions-holds-potentially-malicious-workflows-for-approval/)。
 
 ModelScope 保留 DeepSeek-V4-Pro 作为首选，备用模型改为
 `Qwen/Qwen3.5-397B-A17B`。该模型的 API 示例见

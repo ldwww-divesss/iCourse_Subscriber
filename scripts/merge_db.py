@@ -76,10 +76,10 @@ def merge(local_path: str, remote_path: str):
                 INSERT OR IGNORE INTO main.lectures
                     (sub_id, course_id, sub_title, date, transcript, summary,
                      processed_at, emailed_at, error_msg, error_count, error_stage,
-                     summary_model)
+                     summary_model, last_error_at)
                 SELECT sub_id, course_id, sub_title, date, transcript, summary,
                        processed_at, emailed_at, error_msg, error_count, error_stage,
-                       summary_model
+                       summary_model, last_error_at
                 FROM local.lectures
             """)
 
@@ -107,6 +107,12 @@ def merge(local_path: str, remote_path: str):
                         WHEN COALESCE(l.processed_at, main.lectures.processed_at) IS NOT NULL
                         THEN NULL
                         ELSE COALESCE(l.error_stage, main.lectures.error_stage)
+                    END,
+                    last_error_at = CASE
+                        WHEN COALESCE(l.processed_at, main.lectures.processed_at) IS NOT NULL
+                        THEN NULL
+                        ELSE NULLIF(MAX(COALESCE(l.last_error_at, ''),
+                                            COALESCE(main.lectures.last_error_at, '')), '')
                     END
                 FROM local.lectures l
                 WHERE main.lectures.sub_id = l.sub_id
