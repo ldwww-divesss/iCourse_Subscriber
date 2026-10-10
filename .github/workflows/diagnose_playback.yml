@@ -7,6 +7,11 @@ on:
         required: false
         default: ''
         type: string
+      sub_ids:
+        description: Exact lecture IDs to inspect (blank samples first, middle and last)
+        required: false
+        default: ''
+        type: string
 permissions:
   contents: read
 jobs:
@@ -24,4 +29,5 @@ jobs:
           StuId: ${{ secrets.STUID }}
           UISPsw: ${{ secrets.UISPSW }}
           DIAGNOSTIC_COURSE_IDS: ${{ inputs.course_ids || secrets.COURSE_IDS }}
+          DIAGNOSTIC_SUB_IDS: ${{ inputs.sub_ids }}
         run: python -u -m scripts.diagnose_playback

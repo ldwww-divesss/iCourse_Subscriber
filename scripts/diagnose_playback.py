@@ -52,6 +52,9 @@ def main():
                   os.environ.get('DIAGNOSTIC_COURSE_IDS', '').split(',') if value.strip()]
     if not course_ids or not all(value.isdigit() for value in course_ids):
         raise SystemExit('Configure COURSE_IDS or provide numeric course IDs')
+    sub_ids = {value.strip() for value in os.environ.get('DIAGNOSTIC_SUB_IDS', '').split(',') if value.strip()}
+    if not all(value.isdigit() for value in sub_ids):
+        raise SystemExit('Provide numeric lecture IDs')
     client = ICourseClient(login())
     for course_id in course_ids:
         response = request(client, '/courseapi/v3/multi-search/get-course-detail', {'course_id': course_id})
@@ -64,6 +67,8 @@ def main():
                           'playback_status_counts': dict(Counter(str(item.get('playback_status')) for item in items))}), flush=True)
         # Sample first, middle and last lectures to limit diagnostic traffic.
         samples = [items[i] for i in sorted({0, len(items) // 2, len(items) - 1})] if items else []
+        if sub_ids:
+            samples = [item for item in items if str(item['id']) in sub_ids]
         for item in samples:
             result = {'course_id': course_id, 'sub_id': item['id'], 'date': item.get('sub_title', '')[:10],
                       'playback_status': item.get('playback_status')}
@@ -77,14 +82,24 @@ def main():
                     message = payload.get('msg')
                     if isinstance(message, str) and 'http' not in message.lower() and len(message) <= 120:
                         result[name + '_message'] = message
-                    # Only inspect successful responses. Never sign or request media URLs.
-                    if payload.get('code') == 0:
+                    # Nonzero responses can still contain playback metadata.
+                    # Emit shapes and counts only, never URLs or credentials.
+                    if isinstance(payload.get('data'), dict):
                         body = payload.get('data') or {}
                         content = body.get('content') or {}
                         playback = content.get('playback') or {}
                         result[name + '_video_list_urls'] = url_count(body.get('video_list'))
                         result[name + '_playurl_urls'] = url_count(body.get('playurl'))
                         result[name + '_playback_url_present'] = bool(playback.get('url')) if isinstance(playback, dict) else False
+                        result[name + '_data_keys'] = sorted(body)
+                        result[name + '_content_keys'] = sorted(content) if isinstance(content, dict) else []
+                        result[name + '_playback_keys'] = sorted(playback) if isinstance(playback, dict) else []
+                        result[name + '_url_count'] = url_count(body)
+                        result[name + '_video_list_type'] = type(body.get('video_list')).__name__
+                        for field in ('status', 'playback_status', 'is_open', 'open_time', 'review_status'):
+                            value = body.get(field)
+                            if isinstance(value, (int, bool)) or (isinstance(value, str) and len(value) < 40 and 'http' not in value.lower()):
+                                result[name + '_' + field] = value
                 except Exception as exc:
                     result[name + '_error_type'] = type(exc).__name__
                 time.sleep(0.3)
