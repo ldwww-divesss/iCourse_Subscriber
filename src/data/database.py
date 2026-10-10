@@ -65,6 +65,14 @@ class Database:
                     self.conn.execute(
                         f"ALTER TABLE ppt_pages ADD COLUMN {col} {typedef}"
                     )
+            invalid = self.conn.execute("""
+                SELECT 1 FROM lectures
+                WHERE (processed_at IS NOT NULL AND processed_at NOT GLOB '????-??-??*')
+                   OR (error_count IS NOT NULL AND typeof(error_count) != 'integer')
+                LIMIT 1
+            """).fetchone()
+            if invalid:
+                raise RuntimeError("Invalid lecture status; recover the database from a trusted snapshot before processing")
 
     def write_meta(self, key: str, value: str):
         """Persist a key-value pair (e.g. COURSE_IDS from CI secret)."""

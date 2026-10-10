@@ -1,0 +1,45 @@
+name: Repair 2026-10-10 lecture status
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: icourse-check
+  cancel-in-progress: false
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pycryptodome
+      - name: Recover status without transcribing or emailing
+        env:
+          STUID: ${{ secrets.STUID }}
+          UISPSW: ${{ secrets.UISPSW }}
+        run: |
+          TRUSTED=38170e9b99958945ae6086d57b9b481fc4650406
+          AFFECTED=3b8ff1b4c3b76ffb3567d336afb66d1012394cfc
+          git fetch origin "+refs/heads/data:refs/remotes/origin/data"
+          test "$(git rev-parse origin/data)" = "$AFFECTED" || { echo "Data changed; review before repair."; exit 1; }
+          git fetch origin "$TRUSTED"
+          mkdir -p work/recovery/trusted work/recovery/affected
+          git archive "$TRUSTED" data/ | tar -x -C work/recovery/trusted
+          git archive "$AFFECTED" data/ | tar -x -C work/recovery/affected
+          python scripts/db_shard.py reassemble work/recovery/trusted/data work/recovery/trusted.db
+          python scripts/db_shard.py reassemble work/recovery/affected/data work/recovery/affected.db
+          python scripts/repair_20261010.py work/recovery/trusted.db work/recovery/affected.db work/recovery/recovered.db
+          python scripts/db_shard.py shard work/recovery/recovered.db work/recovery/output
+          git push origin origin/data:refs/heads/data-backup-20261010-3b8ff1b
+          git checkout --detach origin/data
+          cp work/recovery/output/icourse-index.enc data/icourse-index.enc
+          rm -f data/shards/*.db.gz.enc
+          cp work/recovery/output/shards/*.db.gz.enc data/shards/
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git commit -m "fix: recover lecture status from trusted snapshot"
+          git push origin HEAD:refs/heads/data

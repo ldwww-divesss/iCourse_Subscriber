@@ -526,8 +526,8 @@ def _migrate_shard_schema(target: sqlite3.Connection) -> None:
 
     Older shards (created by previous code versions) may lack migration
     columns (from previous schema versions), which causes ``INSERT ... SELECT *``
-    to fail with a column-count mismatch.  Adding the missing column
-    to the shard before the INSERT makes the ``*`` lists match.
+    to fail with a column-count mismatch. Add missing columns before
+    copying by name; ALTER TABLE appends columns, so SELECT * is unsafe.
     """
     meta_exists = target.execute(
         "SELECT 1 FROM shard.sqlite_master "
@@ -608,30 +608,11 @@ def reassemble_database(
                 target.execute("ATTACH DATABASE ? AS shard", (tmp_path,))
                 try:
                     _migrate_shard_schema(target)
-                    target.execute(
-                        "INSERT OR IGNORE INTO main.courses "
-                        "SELECT * FROM shard.courses"
-                    )
-                    target.execute(
-                        "INSERT OR IGNORE INTO main.lectures "
-                        "SELECT * FROM shard.lectures"
-                    )
-                    target.execute(
-                        "INSERT OR IGNORE INTO main.ppt_pages "
-                        "SELECT * FROM shard.ppt_pages"
-                    )
-                    # all_courses and meta are only ever populated in
-                    # the meta shard, but INSERT OR IGNORE makes this
-                    # safe even if a course-data shard happened to
-                    # carry rows for them (legacy shards do).
-                    target.execute(
-                        "INSERT OR IGNORE INTO main.all_courses "
-                        "SELECT * FROM shard.all_courses"
-                    )
-                    target.execute(
-                        "INSERT OR IGNORE INTO main.meta "
-                        "SELECT * FROM shard.meta"
-                    )
+                    for table in ("courses", "lectures", "ppt_pages", "all_courses", "meta"):
+                        columns = [row[1] for row in target.execute(f"PRAGMA main.table_info('{table}')")]
+                        names = ", ".join('"' + col.replace('"', '""') + '"' for col in columns)
+                        target.execute(f"INSERT OR IGNORE INTO main.{table} ({names}) "
+                                       f"SELECT {names} FROM shard.{table}")
                     target.commit()
                 finally:
                     target.execute("DETACH DATABASE shard")
