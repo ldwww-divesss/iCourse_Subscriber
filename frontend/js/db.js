@@ -137,6 +137,7 @@ async function _attachShard(shardBytes) {
 }
 
 function _deriveState(row) {
+  if (row.summary && row.transcript_partial) return "ready";
   // "no_video" is a soft error stage the backend records when the lecture
   // has no playable video yet (it retries a few runs in case the recording
   // appears later).  Render it as a gray informational badge, not a red
@@ -197,7 +198,7 @@ function _lectureOrderKey(subTitle) {
 function _getLectures(courseId) {
   const rows = _queryAll(`
     SELECT sub_id, sub_title, date, summary, processed_at,
-           error_stage, error_msg, summary_model, transcript
+           error_stage, error_msg, summary_model, transcript, transcript_partial
     FROM lectures WHERE course_id = ?
   `, [courseId]);
   // Chronological ascending (earliest first); 第N-M节 breaks intra-day ties so

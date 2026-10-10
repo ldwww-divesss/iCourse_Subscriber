@@ -6,9 +6,19 @@ on:
     # 设计这个奇怪的时间是为了避免整点时的github队列峰值，避免排队过久。
     - cron: "36 11 * * *"
   workflow_dispatch:
+    inputs:
+      retry_failed:
+        description: Retry failed lectures immediately, including those in cooldown
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
+
+concurrency:
+  group: icourse-check
+  cancel-in-progress: false
 
 jobs:
   check:
@@ -173,7 +183,7 @@ jobs:
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
           LECTURE_TIMEOUT_SECONDS: ${{ vars.LECTURE_TIMEOUT_SECONDS || '1800' }}
           MAX_LECTURE_ERRORS: ${{ vars.MAX_LECTURE_ERRORS || '3' }}
-          LECTURE_RETRY_COOLDOWN_SECONDS: ${{ vars.LECTURE_RETRY_COOLDOWN_SECONDS || '86400' }}
+          LECTURE_RETRY_COOLDOWN_SECONDS: ${{ inputs.retry_failed && '0' || vars.LECTURE_RETRY_COOLDOWN_SECONDS || '86400' }}
           # All secrets, JSON-encoded. provider_env.py passes only the
           # vars named by config.MODEL_PROVIDERS (api_key_env /
           # base_url_env), so user-defined providers with custom env-var

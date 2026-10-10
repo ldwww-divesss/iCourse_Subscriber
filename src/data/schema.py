@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS lectures (
     course_id TEXT NOT NULL,
     sub_title TEXT, date TEXT,
     transcript TEXT, summary TEXT,
+    transcript_partial INTEGER DEFAULT 0,
+    audio_received_seconds REAL, audio_expected_seconds REAL,
     processed_at TEXT, emailed_at TEXT,
     error_msg TEXT, error_count INTEGER DEFAULT 0,
     error_stage TEXT, summary_model TEXT, last_error_at TEXT,
@@ -77,6 +79,9 @@ LECTURES_MIGRATION_COLUMNS: list[tuple[str, str]] = [
     ("error_stage", "TEXT"),
     ("summary_model", "TEXT"),
     ("last_error_at", "TEXT"),
+    ("transcript_partial", "INTEGER DEFAULT 0"),
+    ("audio_received_seconds", "REAL"),
+    ("audio_expected_seconds", "REAL"),
 ]
 
 # Columns added to ``ppt_pages`` after its initial shape shipped.

@@ -386,22 +386,21 @@ class Transcriber:
         last_report = t0
         last_segment_at = 0.0
         silence_marked = False
+        interruption = None
 
         while True:
             now = time.time()
             if now - t0 > timeout:
-                raise TimeoutError(
-                    f"Transcription timed out after {timeout}s"
-                )
+                interruption = f"Transcription timed out after {timeout}s"
+                break
 
             raw = read_fn(BYTES_PER_SECOND)
             if not raw:
                 if is_eof_fn():
                     break
                 if now - last_data_at > config.ASR_IDLE_TIMEOUT_SECONDS:
-                    raise TimeoutError(
-                        f"No audio data received for {config.ASR_IDLE_TIMEOUT_SECONDS}s"
-                    )
+                    interruption = f"No audio data received for {config.ASR_IDLE_TIMEOUT_SECONDS}s"
+                    break
                 if wait_on_empty_sec > 0:
                     time.sleep(wait_on_empty_sec)
                 continue
@@ -464,6 +463,8 @@ class Transcriber:
                 )
 
         # Flush VAD
+        if interruption and total_bytes == 0:
+            raise TimeoutError(interruption)
         self._vad.flush()
         self._drain_segments(segments)
 
@@ -491,25 +492,23 @@ class Transcriber:
             )
 
         rc = return_code_fn()
+        diagnostics = self.download_diagnostics(stderr_output, rc)
+        self._last_download_diagnostics = diagnostics
         # -9/-15: SIGKILL/SIGTERM — the downloader's release() terminates
         # ffmpeg once we're done reading; neither is an ffmpeg failure.
         if rc not in (0, -9, -15, None):
             stderr_text = stderr_output.decode(errors="replace")
             if "does not contain any stream" in stderr_text:
                 raise NoAudioStreamError(
-                    f"ffmpeg found no audio stream (video-only file).\n"
-                    f"stderr (last 500 chars):\n{stderr_text[-500:]}"
+                    f"ffmpeg found no audio stream (video-only file). {diagnostics}"
                 )
-            raise RuntimeError(
-                f"ffmpeg exited with code {rc}.\n"
-                f"stderr (last 500 chars):\n{stderr_text[-500:]}"
-            )
+            interruption = f"ffmpeg download stopped: {diagnostics}"
 
         if total_bytes == 0:
-            stderr_text = stderr_output.decode(errors="replace")[-500:]
+            if interruption and rc in (0, -9, -15, None):
+                raise TimeoutError(interruption)
             raise RuntimeError(
-                f"ffmpeg produced no audio output (0 bytes received).\n"
-                f"stderr (last 500 chars):\n{stderr_text}"
+                f"ffmpeg produced no audio output (0 bytes received). {diagnostics}"
             )
 
         speed_kbps = (total_bytes / 1024) / elapsed if elapsed > 0 else 0
@@ -548,7 +547,27 @@ class Transcriber:
         )
         self._last_transcript = transcript
         self._last_segments = segments
+        if interruption:
+            raise IncompleteAudioError(
+                interruption, actual_duration=duration,
+                expected_duration=self._media_duration or 0,
+                transcript=transcript, segments=segments,
+            )
         return transcript, segments
+
+    @staticmethod
+    def download_diagnostics(stderr_output: bytes, returncode: int | None) -> str:
+        """Report transport categories without leaking signed URLs or cookies."""
+        text = stderr_output.decode(errors="replace").lower()
+        terms = {
+            "premature_eof": ("stream ends prematurely", "partial file", "end of file"),
+            "timeout": ("timed out", "timeout"),
+            "connection_error": ("connection reset", "connection refused", "input/output error", "tls"),
+            "decode_error": ("invalid data", "corrupt", "error while decoding"),
+        }
+        reasons = [name for name, needles in terms.items() if any(word in text for word in needles)]
+        codes = sorted(set(re.findall(r"(?:http error|server returned)\s+(\d{3})", text)))
+        return f"exit={returncode}, signals={','.join(reasons) or 'none'}, http={','.join(codes) or 'none'}"
 
     def _check_completeness(self, transcript: str,
                             segments: list[dict]) -> None:
@@ -564,7 +583,7 @@ class Transcriber:
                 raise IncompleteAudioError(
                     f"Only received {self._last_duration:.0f}s of "
                     f"{self._media_duration:.0f}s audio ({ratio:.0%}). "
-                    f"Connection may have dropped.",
+                    f"Download diagnostics: {getattr(self, '_last_download_diagnostics', 'unknown')}",
                     actual_duration=self._last_duration,
                     expected_duration=self._media_duration,
                     transcript=transcript,
@@ -601,10 +620,10 @@ class Transcriber:
         t_wait = time.time()
         while not os.path.exists(audio_path):
             if ffmpeg_proc.poll() is not None:
-                stderr_text = b"".join(stderr_chunks).decode(errors="replace")[-500:]
+                diagnostics = self.download_diagnostics(b"".join(stderr_chunks), ffmpeg_proc.returncode)
                 raise RuntimeError(
                     f"ffmpeg exited (rc={ffmpeg_proc.returncode}) before "
-                    f"writing audio file {audio_path}.\nstderr:\n{stderr_text}"
+                    f"writing audio file {audio_path}. {diagnostics}"
                 )
             if time.time() - t_wait > 60:
                 raise TimeoutError(

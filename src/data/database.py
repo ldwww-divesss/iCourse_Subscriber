@@ -217,12 +217,30 @@ class Database:
             rows = self.conn.execute(query, params).fetchall()
         return [dict(row) for row in rows]
 
-    def update_transcript(self, sub_id: str, transcript: str):
+    def update_transcript(self, sub_id: str, transcript: str, *, partial: bool = False,
+                          received_seconds: float | None = None,
+                          expected_seconds: float | None = None) -> bool:
+        """Keep the most complete result and invalidate notes for replaced text."""
         with self._lock, self.conn:
+            current = self.get_lecture(sub_id) or {}
+            if partial and current.get("transcript"):
+                if not current.get("transcript_partial"):
+                    return False
+                if (received_seconds or 0) <= (current.get("audio_received_seconds") or 0):
+                    return False
+            changed = current.get("transcript") != transcript or bool(current.get("transcript_partial")) != partial
             self.conn.execute(
-                "UPDATE lectures SET transcript = ? WHERE sub_id = ?",
-                (transcript, sub_id),
+                """UPDATE lectures SET transcript = ?, transcript_partial = ?,
+                       audio_received_seconds = ?, audio_expected_seconds = ?
+                   WHERE sub_id = ?""",
+                (transcript, int(partial), received_seconds, expected_seconds, sub_id),
             )
+            if changed:
+                self.conn.execute(
+                    """UPDATE lectures SET summary = NULL, summary_model = NULL,
+                           processed_at = NULL, emailed_at = NULL WHERE sub_id = ?""", (sub_id,),
+                )
+            return True
 
     def mark_processed(self, sub_id: str):
         with self._lock, self.conn:
@@ -412,8 +430,7 @@ class Database:
                 """SELECT l.*, c.title AS course_title, c.teacher
                    FROM lectures l
                    JOIN courses c ON l.course_id = c.course_id
-                   WHERE l.processed_at IS NOT NULL
-                     AND l.emailed_at IS NULL
+                   WHERE l.emailed_at IS NULL
                      AND l.summary IS NOT NULL""",
             ).fetchall()
         return [dict(row) for row in rows]

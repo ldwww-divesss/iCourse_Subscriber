@@ -59,6 +59,8 @@ class ICourseClient:
         self.vpn = vpn_session
         self.base_url = config.ICOURSE_BASE
         self._userinfo = None
+        self._sub_info_codes = {}
+        self._video_failures = {}
 
     def get_userinfo(self) -> dict:
         """Get current user info (id, tenant_id, phone, account).
@@ -470,13 +472,42 @@ class ICourseClient:
         resp.raise_for_status()
         data = resp.json()
         payload = data.get("data") or {}
+        self._sub_info_codes[str(sub_id)] = data.get("code")
 
         if data.get("code") != 0 and not payload:
             raise RuntimeError(
                 f"API error for sub-info {sub_id}: {data.get('msg')}"
             )
+        if data.get("code") != 0:
+            print(f"    sub-info {sub_id}: API code={data.get('code')} (partial metadata)")
 
         return payload
+
+    @staticmethod
+    def _video_candidates(info: dict) -> list[str]:
+        """Accept map/list playback fields and MP4 URLs containing query strings."""
+        candidates = []
+
+        def collect(value):
+            if isinstance(value, str):
+                parsed = urlparse(value)
+                if parsed.scheme in ("http", "https") and parsed.path.lower().endswith(".mp4"):
+                    candidates.append(value)
+            elif isinstance(value, list):
+                for item in value:
+                    collect(item)
+            elif isinstance(value, dict):
+                for item in value.values():
+                    collect(item)
+
+        if not isinstance(info, dict):
+            return []
+        for field in ("video_list", "playurl"):
+            collect(info.get(field))
+        content = info.get("content")
+        if isinstance(content, dict):
+            collect(content.get("playback"))
+        return list(dict.fromkeys(candidates))
 
     def get_video_url(self, course_id: str, sub_id: str) -> str | None:
         """Get a signed MP4 video URL for a specific lecture.
@@ -504,62 +535,47 @@ class ICourseClient:
 
         # Get server timestamp for signing
         now = info.get("now")
-        if isinstance(now, str):
-            now = int(now)
+        try:
+            now = int(now) if now else None
+        except (ValueError, TypeError):
+            now = None
 
         # Extract base video URL from playurl dict or video_list
-        base_url = None
+        candidates = self._video_candidates(info)
+        base_url = candidates[0] if candidates else None
 
-        # Try video_list first (has preview_url without /0/ prefix)
-        video_list = info.get("video_list", {})
-        if isinstance(video_list, dict):
-            for _, v in video_list.items():
-                if isinstance(v, dict):
-                    preview = v.get("preview_url")
-                    if preview and preview.endswith(".mp4"):
-                        base_url = preview
-                        break
-
-        # Fallback: try playurl dict (has /0/ prefix, may need stripping)
-        if not base_url:
-            playurl = info.get("playurl", {})
-            if isinstance(playurl, dict):
-                for k, v in playurl.items():
-                    if k == "now":
-                        continue
-                    if isinstance(v, str) and v.endswith(".mp4"):
-                        base_url = v
-                        break
-
-        # Review-gate fallback: nested content.playback.url is preserved
-        # even when code == 7001 scrubs the top-level fields above.
-        if not base_url:
-            playback = (info.get("content") or {}).get("playback") or {}
-            nested = playback.get("url")
-            if isinstance(nested, str) and nested.endswith(".mp4"):
-                base_url = nested
-                if not now:
-                    content_now = (info.get("content") or {}).get("now")
-                    if isinstance(content_now, (int, str)):
-                        now = int(content_now)
+        # Use the API timestamp when supplied, otherwise sign with local time.
+        if base_url and not now:
+            content = info.get("content") or {}
+            try:
+                now = int(content.get("now")) if content.get("now") else None
+            except (ValueError, TypeError, AttributeError):
+                now = None
 
         # Last resort: hit get-sub-detail (gate-free) directly.
         if not base_url:
             try:
                 detail = self.get_sub_detail(course_id, sub_id)
-                content = detail.get("content", {})
-                playback = content.get("playback", {})
-                if playback and playback.get("url"):
-                    base_url = playback["url"]
-            except Exception:
-                pass
+                candidates = self._video_candidates(detail)
+                base_url = candidates[0] if candidates else None
+            except Exception as e:
+                print(f"    sub-detail unavailable for {sub_id} ({type(e).__name__})")
 
         if not base_url:
+            reason = "iCourse 接口未提供可播放录播地址"
+            if self._sub_info_codes.get(str(sub_id)) == 7001:
+                reason = "视频未到开放时间（iCourse API 7001），当前未提供录播地址"
+            elif info.get("can_watch") is False:
+                reason = "iCourse 返回 can_watch=false，当前账号无法观看该录播，接口未提供地址"
+            self._video_failures[str(sub_id)] = reason
             print(f"    No video URL found for {sub_id} (tried video_list, "
-                  f"playurl, content.playback, sub_detail)")
+                  f"playurl, content.playback, sub_detail): {reason}")
             return None
 
         return self.sign_video_url(base_url, now=now)
+
+    def video_unavailable_reason(self, sub_id: str) -> str:
+        return self._video_failures.get(str(sub_id), "iCourse 接口未提供可播放录播地址")
 
     def get_stream_params(self, video_url: str) -> tuple[str, str]:
         """Get WebVPN URL and HTTP headers for direct streaming (e.g., ffmpeg).

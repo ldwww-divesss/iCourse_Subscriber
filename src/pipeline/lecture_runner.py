@@ -164,8 +164,9 @@ class LectureRunner:
             return None
 
         # ── Phase G — persist + clear errors ───────────────────────────
-        self._db.mark_processed(sub_id)
-        self._db.clear_error(sub_id)
+        if not self._db.get_lecture(sub_id).get("transcript_partial"):
+            self._db.mark_processed(sub_id)
+            self._db.clear_error(sub_id)
 
         # ── Phase H — release audio resources (ffmpeg + file) ──────────
         self._release_audio(sub_id)
@@ -181,6 +182,7 @@ class LectureRunner:
         return bool(
             existing
             and existing.get("summary")
+            and not existing.get("transcript_partial")
         )
 
     def prefetch_first(self, course_id: str, sub_id: str) -> None:
@@ -209,7 +211,7 @@ class LectureRunner:
         prefetching from spending a download slot (and a full lecture of
         bandwidth) on audio that would just be killed in Phase H."""
         existing = self._db.get_lecture(sub_id)
-        if existing and existing.get("transcript"):
+        if existing and existing.get("transcript") and not existing.get("transcript_partial"):
             return False
         if config.USE_OFFICIAL_TRANSCRIPT:
             try:
@@ -260,7 +262,7 @@ class LectureRunner:
         complete-enough (no >20 min silence gaps) it replaces the ASR
         step entirely, saving ~5 min of CPU time per lecture.
         """
-        if existing and existing.get("transcript"):
+        if existing and existing.get("transcript") and not existing.get("transcript_partial"):
             self._reporter.info(
                 f"    Transcript exists "
                 f"({len(existing['transcript'])} chars), "
@@ -307,7 +309,7 @@ class LectureRunner:
         except TimeoutError as e:
             self._reporter.info(f"    [SKIP] {e}")
             self._db.update_error(sub_id, "transcribe", str(e))
-            return None, None
+            return (existing["transcript"], None) if existing and existing.get("transcript_partial") else (None, None)
         if handle is None:
             # AudioDownloader returns None when get_video_url() returned
             # None — i.e. the lecture has no playable video.  Record an
@@ -318,8 +320,8 @@ class LectureRunner:
             self._reporter.lecture_skip_no_video(
                 existing.get("sub_title", sub_id) if existing else sub_id
             )
-            self._db.update_error(sub_id, "no_video", "no playable video URL")
-            return None, None
+            self._db.update_error(sub_id, "no_video", self._client.video_unavailable_reason(sub_id))
+            return (existing["transcript"], None) if existing and existing.get("transcript_partial") else (None, None)
 
         try:
             transcript, segments = self._transcriber.transcribe_tail(
@@ -332,16 +334,21 @@ class LectureRunner:
             self._release_audio(sub_id)
             return None, None
         except IncompleteAudioError as e:
-            # Truncated download (ffmpeg may even exit 0 on a server-side
-            # cut).  Don't persist the partial transcript — it would
-            # short-circuit the retry — just record the error so the
-            # lecture is retried up to max_errors times.
             self._reporter.info(
-                f"    [SKIP] Incomplete audio, will retry next run: {e}"
+                f"    [PARTIAL] Incomplete audio, retaining available text: {e}"
             )
             self._db.update_error(sub_id, "transcribe", str(e))
             self._release_audio(sub_id)
-            return None, None
+            if not e.transcript.strip():
+                return (existing["transcript"], None) if existing and existing.get("transcript_partial") else (None, None)
+            notice = self._partial_notice(e.actual_duration, e.expected_duration)
+            text = notice + "\n\n" + e.transcript
+            if self._db.update_transcript(
+                    sub_id, text, partial=True, received_seconds=e.actual_duration,
+                    expected_seconds=e.expected_duration):
+                return text, e.segments
+            saved = self._db.get_lecture(sub_id)
+            return saved["transcript"], None
         except Exception as e:
             self._reporter.info(
                 f"    [FAIL] Transcription error: {type(e).__name__}: {e}"
@@ -356,10 +363,18 @@ class LectureRunner:
     def _summarize(self, sub_id: str, course_title: str, transcript: str,
                    transcript_segments: list[dict] | None) -> Optional[str]:
         try:
+            saved = self._db.get_lecture(sub_id) or {}
+            if saved.get("transcript_partial") and saved.get("summary"):
+                return saved["summary"]
             kept_pages = self._db.get_done_ppt_pages(sub_id)
             prompt_text, mode = bucketer.assemble(
                 transcript, transcript_segments, kept_pages,
             )
+            notice = ""
+            if saved.get("transcript_partial"):
+                notice = self._partial_notice(saved.get("audio_received_seconds") or 0,
+                                              saved.get("audio_expected_seconds") or 0)
+                prompt_text = (notice + "\n仅总结已提供的录音和课件，不补写缺失录音中的讲解。\n\n" + prompt_text)
             self._reporter.info(
                 f"    [Time] Generating summary at "
                 f"{time.strftime('%H:%M:%S')}"
@@ -368,6 +383,8 @@ class LectureRunner:
             summary, model_used = self._summarizer.summarize(
                 course_title, prompt_text,
             )
+            if notice:
+                summary = notice + "\n\n" + summary
             self._reporter.info(
                 f"    [OK] Summary by {model_used}: {len(summary)} chars"
             )
@@ -379,6 +396,16 @@ class LectureRunner:
             )
             self._db.update_error(sub_id, "summarize", str(e))
             raise
+
+    @staticmethod
+    def _partial_notice(received: float, expected: float) -> str:
+        if not expected:
+            return (f"> **音频不完整**：已收到 {received / 60:.1f} 分钟音频，下载中断，"
+                    "无法确认录播总时长。以下仅覆盖已收到的音频及可用课件；后续将继续尝试补全。")
+        ratio = received / expected if expected else 0
+        return (f"> **音频不完整**：已收到 {received / 60:.1f} 分钟音频，"
+                f"录播标称时长 {expected / 60:.1f} 分钟（{ratio:.0%}）。"
+                "以下转录和笔记仅覆盖已收到的音频及可用课件；后续将继续尝试补全。")
 
     def _release_audio(self, sub_id: str):
         try:

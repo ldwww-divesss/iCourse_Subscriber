@@ -224,6 +224,8 @@ class AudioDownloader:
                     "-headers", headers,
                     "-reconnect", "1",
                     "-reconnect_streamed", "1",
+                    "-reconnect_on_network_error", "1",
+                    "-reconnect_on_http_error", "429,5xx",
                     "-reconnect_delay_max", "5",
                     "-i", vpn_url,
                     "-vn",
@@ -247,7 +249,7 @@ class AudioDownloader:
                             stderr_chunks.append(chunk)
                             if len(stderr_chunks) > 2048:
                                 # keep only the tail to bound memory
-                                del stderr_chunks[: -1024]
+                                del stderr_chunks[128: -1024]
                     except Exception:
                         pass
 
