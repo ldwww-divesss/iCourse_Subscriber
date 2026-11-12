@@ -35,6 +35,7 @@
 |---|---|---|---|
 | `STUID` | ✅ | 复旦学号 | `22307110000` |
 | `UISPSW` | ✅ | UIS 统一身份认证密码 | `your_password` |
+| `UIS_TOTP_SECRET` | 按需 | UIS 要求二次验证时使用的 Base32 密钥（见下） | `XXW33***********` |
 | `COURSE_IDS` | ✅ | 要监控的课程 ID，多个用英文逗号分隔 | `35472,30251` |
 | `DASHSCOPE_API_KEY` | ⬜ | ModelScope 平台 API Key | `ms-xxxxxxxx` |
 | `DEEPSEEK_API_KEY` | ⬜ | DeepSeek API Key（推荐） | `sk-xxxxxxxx` |
@@ -44,6 +45,13 @@
 | `RECEIVER_EMAIL` | ✅ | 接收摘要邮件的邮箱 | `you@m.fudan.edu.com` |
 
 > 至少配置一个 LLM API Key（DASHSCOPE、DEEPSEEK 或 GEMINI）。程序按配置顺序自动回退尝试。如果需要选择其他的LLM供应商，可以在`src\runtime\config.py`路径下自定义供应商。
+
+#### 配置动态口令二次验证（TOTP）
+
+如果 UIS 登录要求二次验证，请进入 [UIS 个人中心的账号安全页面](https://id.fudan.edu.cn/uc/#/pc/userCenter/accountSecurity)，在「动态口令」中按提示完成绑定，并将绑定时获取的 **Base32 密钥**存入 GitHub Actions 的 `UIS_TOTP_SECRET`。
+
+![UIS 动态口令绑定页面，箭头所指密钥用于 UIS_TOTP_SECRET](docs/uis-totp.png)
+
 
 ### 第 3 步：获取课程 ID
 
@@ -110,9 +118,8 @@
 一次订阅检查，数据库会保留已完成的记录，并补处理遗漏课次。
 参见 [GitHub 的工作流审核说明](https://github.blog/changelog/2026-07-28-github-actions-holds-potentially-malicious-workflows-for-approval/)。
 
-ModelScope 保留 DeepSeek-V4-Pro 作为首选，备用模型改为
-`Qwen/Qwen3.5-397B-A17B`。该模型的 API 示例见
-[ModelScope 模型页](https://modelscope.cn/models/Qwen/Qwen3.5-397B-A17B)。
+ModelScope 依次尝试 `deepseek-ai/DeepSeek-V4-Pro-0813`、
+`deepseek-ai/DeepSeek-V4.1-Flash` 和 `Qwen/Qwen3.5-397B-A17B`。
 模型返回空 choices、空正文或调用报错时都会尝试下一个模型，API 权限和额度
 仍取决于账户配置。可以在 `src/runtime/config.py` 中修改模型及服务商顺序。
 

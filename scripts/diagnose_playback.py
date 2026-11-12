@@ -7,7 +7,7 @@ import time
 from collections import Counter
 
 from src.api.icourse import ICourseClient
-from src.api.webvpn import WebVPNSession
+from src.api.webvpn import SecondFactorError, WebVPNSession
 
 
 def login():
@@ -18,6 +18,9 @@ def login():
                 vpn.login()
                 vpn.authenticate_icourse()
             return vpn
+        except SecondFactorError:
+            vpn.session.close()
+            raise
         except Exception as exc:
             print(json.dumps({'login_attempt': attempt + 1, 'error_type': type(exc).__name__}), flush=True)
             if attempt == 2:

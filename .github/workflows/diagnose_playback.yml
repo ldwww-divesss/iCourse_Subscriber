@@ -28,6 +28,7 @@ jobs:
         env:
           StuId: ${{ secrets.STUID }}
           UISPsw: ${{ secrets.UISPSW }}
+          UIS_TOTP_SECRET: ${{ secrets.UIS_TOTP_SECRET }}
           DIAGNOSTIC_COURSE_IDS: ${{ inputs.course_ids || secrets.COURSE_IDS }}
           DIAGNOSTIC_SUB_IDS: ${{ inputs.sub_ids }}
         run: python -u -m scripts.diagnose_playback

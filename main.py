@@ -28,7 +28,7 @@ from src.runtime.scheduler import Scheduler
 from src.runtime.process_guard import run_with_timeout
 from src.ai.summarizer import Summarizer
 from src.ai.transcriber import Transcriber
-from src.api.webvpn import WebVPNSession
+from src.api.webvpn import SecondFactorError, WebVPNSession
 
 
 def login_with_retry(max_attempts: int = 10) -> WebVPNSession:
@@ -49,6 +49,9 @@ def login_with_retry(max_attempts: int = 10) -> WebVPNSession:
             print("[Login] iCourse CAS...")
             vpn.authenticate_icourse()
             return vpn
+        except SecondFactorError:
+            vpn.session.close()
+            raise
         except Exception as e:
             if attempt < max_attempts - 1:
                 print(f"  Failed: {type(e).__name__}: {e}; retrying...")
@@ -263,7 +266,7 @@ def _send_email(emailer: Emailer | None, db: Database, reporter: Reporter,
 
 def _crawl_semester_catalog(client: ICourseClient, db: Database,
                             reporter: Reporter) -> None:
-    """Discover semesters on every run and fetch catalogs for new terms.
+    """Discover semesters on every run and refresh known terms twice a month.
 
     Compare API term names with the names stored in ``all_courses``.
     Only terms with a successfully fetched catalog are considered known,
@@ -349,7 +352,7 @@ def run():
     client = ICourseClient(vpn)
     email_items: list = []
 
-    # Discover new semesters every run; only fetch catalogs not yet stored.
+    # Discover new semesters every run and refresh known terms on the 9th and 25th.
     _crawl_semester_catalog(client, db, reporter)
 
     if not config.COURSE_IDS:
